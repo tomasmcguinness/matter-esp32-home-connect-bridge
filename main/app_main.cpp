@@ -21,7 +21,6 @@
 #include <math.h>
 #include "jpeg_decoder.h"
 
-
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_vendor.h"
@@ -31,11 +30,12 @@
 
 static const char *TAG = "app";
 
-#define LCD_HOST                SPI2_HOST
-#define PARALLEL_LINES          16
-#define LCD_BK_LIGHT_ON_LEVEL   0
+#define LCD_HOST SPI2_HOST
+#define PARALLEL_LINES 16
+#define LCD_BK_LIGHT_ON_LEVEL 0
 #define PIN_NUM_DC 46
 #define PIN_NUM_RST 47
+#define PIN_NUM_BUSY 48
 
 #define IMAGE_W 320
 #define IMAGE_H 240
@@ -65,19 +65,21 @@ static esp_err_t app_attribute_update_cb(attribute::callback_type_t type, uint16
 /*
  The LCD needs a bunch of command/argument values to be initialized. They are stored in this struct.
 */
-typedef struct {
+typedef struct
+{
     uint8_t cmd;
     uint8_t data[16];
-    uint8_t databytes; //No of data in data; bit 7 = delay after set; 0xFF = end of cmds.
+    uint8_t databytes; // No of data in data; bit 7 = delay after set; 0xFF = end of cmds.
 } lcd_init_cmd_t;
 
-typedef enum {
+typedef enum
+{
     LCD_TYPE_ILI = 1,
     LCD_TYPE_ST,
     LCD_TYPE_MAX,
 } type_lcd_t;
 
-//Place data into DRAM. Constant data gets placed into DROM by default, which is not accessible by DMA.
+// Place data into DRAM. Constant data gets placed into DROM by default, which is not accessible by DMA.
 DRAM_ATTR static const lcd_init_cmd_t st_init_cmds[] = {
     /* Memory Data Access Control, MX=MV=1, MY=ML=MH=0, RGB=0 */
     {0x36, {(1 << 5) | (1 << 6)}, 1},
@@ -109,8 +111,7 @@ DRAM_ATTR static const lcd_init_cmd_t st_init_cmds[] = {
     {0x11, {0}, 0x80},
     /* Display On */
     {0x29, {0}, 0x80},
-    {0, {0}, 0xff}
-};
+    {0, {0}, 0xff}};
 
 DRAM_ATTR static const lcd_init_cmd_t ili_init_cmds[] = {
     /* Power control B, power control = 0, DC_ENA = 1 */
@@ -183,15 +184,28 @@ void lcd_cmd(spi_device_handle_t spi, const uint8_t cmd, bool keep_cs_active)
 {
     esp_err_t ret;
     spi_transaction_t t;
-    memset(&t, 0, sizeof(t));       //Zero out the transaction
-    t.length = 8;                   //Command is 8 bits
-    t.tx_buffer = &cmd;             //The data is the cmd itself
-    t.user = (void*)0;              //D/C needs to be set to 0
-    if (keep_cs_active) {
-        t.flags = SPI_TRANS_CS_KEEP_ACTIVE;   //Keep CS active after data transfer
-    }
-    ret = spi_device_polling_transmit(spi, &t); //Transmit!
-    assert(ret == ESP_OK);          //Should have had no issues.
+    memset(&t, 0, sizeof(t)); // Zero out the transaction
+    t.length = 8;             // Command is 8 bits
+    t.tx_buffer = &cmd;       // The data is the cmd itself
+    t.user = (void *)0;       // D/C needs to be set to 0
+    // if (keep_cs_active)
+    // {
+    //     t.flags = SPI_TRANS_CS_KEEP_ACTIVE; // Keep CS active after data transfer
+    // }
+    ret = spi_device_polling_transmit(spi, &t); // Transmit!
+    assert(ret == ESP_OK);                      // Should have had no issues.
+}
+
+void lcd_data(spi_device_handle_t spi, const uint8_t data, bool keep_cs_active)
+{
+    esp_err_t ret;
+    spi_transaction_t t;
+    memset(&t, 0, sizeof(t)); // Zero out the transaction
+    t.length = 8;             // Command is 8 bits
+    t.tx_buffer = &data;      // The data is the cmd itself
+    t.user = (void *)1;       // D/C needs to be set to 1
+    ret = spi_device_polling_transmit(spi, &t); // Transmit!
+    assert(ret == ESP_OK);                      // Should have had no issues.
 }
 
 /* Send data to the LCD. Uses spi_device_polling_transmit, which waits until the
@@ -201,23 +215,24 @@ void lcd_cmd(spi_device_handle_t spi, const uint8_t cmd, bool keep_cs_active)
  * mode for higher speed. The overhead of interrupt transactions is more than
  * just waiting for the transaction to complete.
  */
-void lcd_data(spi_device_handle_t spi, const uint8_t *data, int len)
-{
-    esp_err_t ret;
-    spi_transaction_t t;
-    if (len == 0) {
-        return;    //no need to send anything
-    }
-    memset(&t, 0, sizeof(t));       //Zero out the transaction
-    t.length = len * 8;             //Len is in bytes, transaction length is in bits.
-    t.tx_buffer = data;             //Data
-    t.user = (void*)1;              //D/C needs to be set to 1
-    ret = spi_device_polling_transmit(spi, &t); //Transmit!
-    assert(ret == ESP_OK);          //Should have had no issues.
-}
+// void lcd_data(spi_device_handle_t spi, const uint8_t *data, int len)
+// {
+//     esp_err_t ret;
+//     spi_transaction_t t;
+//     if (len == 0)
+//     {
+//         return; // no need to send anything
+//     }
+//     memset(&t, 0, sizeof(t));                   // Zero out the transaction
+//     t.length = len * 8;                         // Len is in bytes, transaction length is in bits.
+//     t.tx_buffer = data;                         // Data
+//     t.user = (void *)1;                         // D/C needs to be set to 1
+//     ret = spi_device_polling_transmit(spi, &t); // Transmit!
+//     assert(ret == ESP_OK);                      // Should have had no issues.
+// }
 
-//This function is called (in irq context!) just before a transmission starts. It will
-//set the D/C line to the value indicated in the user field.
+// This function is called (in irq context!) just before a transmission starts. It will
+// set the D/C line to the value indicated in the user field.
 void lcd_spi_pre_transfer_callback(spi_transaction_t *t)
 {
     int dc = (int)t->user;
@@ -229,14 +244,14 @@ uint32_t lcd_get_id(spi_device_handle_t spi)
     // When using SPI_TRANS_CS_KEEP_ACTIVE, bus must be locked/acquired
     spi_device_acquire_bus(spi, portMAX_DELAY);
 
-    //get_id cmd
+    // get_id cmd
     lcd_cmd(spi, 0x04, true);
 
     spi_transaction_t t;
     memset(&t, 0, sizeof(t));
     t.length = 8 * 3;
     t.flags = SPI_TRANS_USE_RXDATA;
-    t.user = (void*)1;
+    t.user = (void *)1;
 
     esp_err_t ret = spi_device_polling_transmit(spi, &t);
     assert(ret == ESP_OK);
@@ -244,88 +259,96 @@ uint32_t lcd_get_id(spi_device_handle_t spi)
     // Release bus
     spi_device_release_bus(spi);
 
-    return *(uint32_t*)t.rx_data;
+    return *(uint32_t *)t.rx_data;
 }
 
-void lcd_init(spi_device_handle_t spi)
-{
-    int cmd = 0;
-    const lcd_init_cmd_t* lcd_init_cmds;
+// void lcd_init(spi_device_handle_t spi)
+// {
+//     int cmd = 0;
+//     const lcd_init_cmd_t *lcd_init_cmds;
 
-    //Initialize non-SPI GPIOs
-    gpio_config_t io_conf = {};
-    io_conf.pin_bit_mask = ((1ULL << PIN_NUM_DC) | (1ULL << PIN_NUM_RST));
-    io_conf.mode = GPIO_MODE_OUTPUT;
-    io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
-    gpio_config(&io_conf);
+//     // Initialize non-SPI GPIOs
+//     gpio_config_t io_conf = {};
+//     io_conf.pin_bit_mask = ((1ULL << PIN_NUM_DC) | (1ULL << PIN_NUM_RST));
+//     io_conf.mode = GPIO_MODE_OUTPUT;
+//     io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
+//     gpio_config(&io_conf);
 
-    //Reset the display
-    gpio_set_level((gpio_num_t)PIN_NUM_RST, 0);
-    vTaskDelay(100 / portTICK_PERIOD_MS);
-    gpio_set_level((gpio_num_t)PIN_NUM_RST, 1);
-    vTaskDelay(100 / portTICK_PERIOD_MS);
+//     // Reset the display
+//     gpio_set_level((gpio_num_t)PIN_NUM_RST, 0);
+//     vTaskDelay(100 / portTICK_PERIOD_MS);
+//     gpio_set_level((gpio_num_t)PIN_NUM_RST, 1);
+//     vTaskDelay(100 / portTICK_PERIOD_MS);
 
-    //detect LCD type
-    uint32_t lcd_id = lcd_get_id(spi);
-    int lcd_detected_type = 0;
-    int lcd_type;
+//     // detect LCD type
+//     uint32_t lcd_id = lcd_get_id(spi);
+//     int lcd_detected_type = 0;
+//     int lcd_type;
 
-    printf("LCD ID: %08"PRIx32"\n", lcd_id);
-    if (lcd_id == 0) {
-        //zero, ili
-        lcd_detected_type = LCD_TYPE_ILI;
-        printf("ILI9341 detected.\n");
-    } else {
-        // none-zero, ST
-        lcd_detected_type = LCD_TYPE_ST;
-        printf("ST7789V detected.\n");
-    }
+//     printf("LCD ID: %08" PRIx32 "\n", lcd_id);
+//     if (lcd_id == 0)
+//     {
+//         // zero, ili
+//         lcd_detected_type = LCD_TYPE_ILI;
+//         printf("ILI9341 detected.\n");
+//     }
+//     else
+//     {
+//         // none-zero, ST
+//         lcd_detected_type = LCD_TYPE_ST;
+//         printf("ST7789V detected.\n");
+//     }
 
-#ifdef CONFIG_LCD_TYPE_AUTO
-    lcd_type = lcd_detected_type;
-#elif defined( CONFIG_LCD_TYPE_ST7789V )
-    printf("kconfig: force CONFIG_LCD_TYPE_ST7789V.\n");
-    lcd_type = LCD_TYPE_ST;
-#elif defined( CONFIG_LCD_TYPE_ILI9341 )
-    printf("kconfig: force CONFIG_LCD_TYPE_ILI9341.\n");
-    lcd_type = LCD_TYPE_ILI;
-#endif
-    if (lcd_type == LCD_TYPE_ST) {
-        printf("LCD ST7789V initialization.\n");
-        lcd_init_cmds = st_init_cmds;
-    } else {
-        printf("LCD ILI9341 initialization.\n");
-        lcd_init_cmds = ili_init_cmds;
-    }
+// #ifdef CONFIG_LCD_TYPE_AUTO
+//     lcd_type = lcd_detected_type;
+// #elif defined(CONFIG_LCD_TYPE_ST7789V)
+//     printf("kconfig: force CONFIG_LCD_TYPE_ST7789V.\n");
+//     lcd_type = LCD_TYPE_ST;
+// #elif defined(CONFIG_LCD_TYPE_ILI9341)
+//     printf("kconfig: force CONFIG_LCD_TYPE_ILI9341.\n");
+//     lcd_type = LCD_TYPE_ILI;
+// #endif
+//     if (lcd_type == LCD_TYPE_ST)
+//     {
+//         printf("LCD ST7789V initialization.\n");
+//         lcd_init_cmds = st_init_cmds;
+//     }
+//     else
+//     {
+//         printf("LCD ILI9341 initialization.\n");
+//         lcd_init_cmds = ili_init_cmds;
+//     }
 
-    //Send all the commands
-    while (lcd_init_cmds[cmd].databytes != 0xff) {
-        lcd_cmd(spi, lcd_init_cmds[cmd].cmd, false);
-        lcd_data(spi, lcd_init_cmds[cmd].data, lcd_init_cmds[cmd].databytes & 0x1F);
-        if (lcd_init_cmds[cmd].databytes & 0x80) {
-            vTaskDelay(100 / portTICK_PERIOD_MS);
-        }
-        cmd++;
-    }
+//     // Send all the commands
+//     while (lcd_init_cmds[cmd].databytes != 0xff)
+//     {
+//         lcd_cmd(spi, lcd_init_cmds[cmd].cmd, false);
+//         lcd_data(spi, lcd_init_cmds[cmd].data, lcd_init_cmds[cmd].databytes & 0x1F);
+//         if (lcd_init_cmds[cmd].databytes & 0x80)
+//         {
+//             vTaskDelay(100 / portTICK_PERIOD_MS);
+//         }
+//         cmd++;
+//     }
 
-    ///Enable backlight
-    //gpio_set_level(PIN_NUM_BCKL, LCD_BK_LIGHT_ON_LEVEL);
-}
+//     /// Enable backlight
+//     // gpio_set_level(PIN_NUM_BCKL, LCD_BK_LIGHT_ON_LEVEL);
+// }
 
 extern const uint8_t image_jpg_start[] asm("_binary_image_jpg_start");
 extern const uint8_t image_jpg_end[] asm("_binary_image_jpg_end");
-//Define the height and width of the jpeg file. Make sure this matches the actual jpeg
-//dimensions.
+// Define the height and width of the jpeg file. Make sure this matches the actual jpeg
+// dimensions.
 
-//Decode the embedded image into pixel lines that can be used with the rest of the logic.
+// Decode the embedded image into pixel lines that can be used with the rest of the logic.
 esp_err_t decode_image(uint16_t **pixels)
 {
     *pixels = NULL;
     esp_err_t ret = ESP_OK;
 
-    //Alocate pixel memory. Each line is an array of IMAGE_W 16-bit pixels; the `*pixels` array itself contains pointers to these lines.
+    // Alocate pixel memory. Each line is an array of IMAGE_W 16-bit pixels; the `*pixels` array itself contains pointers to these lines.
     *pixels = (uint16_t *)calloc(IMAGE_H * IMAGE_W, sizeof(uint16_t));
-    //ESP_GOTO_ON_FALSE((*pixels), ESP_ERR_NO_MEM, err, TAG, "Error allocating memory for lines");
+    // ESP_GOTO_ON_FALSE((*pixels), ESP_ERR_NO_MEM, err, TAG, "Error allocating memory for lines");
 
     // const uint32_t image_size = (image_jpg_end - image_jpg_start);
 
@@ -371,144 +394,159 @@ static void send_lines(spi_device_handle_t spi, int ypos, uint16_t *linedata)
 {
     esp_err_t ret;
     int x;
-    //Transaction descriptors. Declared static so they're not allocated on the stack; we need this memory even when this
-    //function is finished because the SPI driver needs access to it even while we're already calculating the next line.
+    // Transaction descriptors. Declared static so they're not allocated on the stack; we need this memory even when this
+    // function is finished because the SPI driver needs access to it even while we're already calculating the next line.
     static spi_transaction_t trans[6];
 
-    //In theory, it's better to initialize trans and data only once and hang on to the initialized
-    //variables. We allocate them on the stack, so we need to re-init them each call.
-    for (x = 0; x < 6; x++) {
+    // In theory, it's better to initialize trans and data only once and hang on to the initialized
+    // variables. We allocate them on the stack, so we need to re-init them each call.
+    for (x = 0; x < 6; x++)
+    {
         memset(&trans[x], 0, sizeof(spi_transaction_t));
-        if ((x & 1) == 0) {
-            //Even transfers are commands
+        if ((x & 1) == 0)
+        {
+            // Even transfers are commands
             trans[x].length = 8;
-            trans[x].user = (void*)0;
-        } else {
-            //Odd transfers are data
+            trans[x].user = (void *)0;
+        }
+        else
+        {
+            // Odd transfers are data
             trans[x].length = 8 * 4;
-            trans[x].user = (void*)1;
+            trans[x].user = (void *)1;
         }
         trans[x].flags = SPI_TRANS_USE_TXDATA;
     }
-    trans[0].tx_data[0] = 0x2A;         //Column Address Set
-    trans[1].tx_data[0] = 0;            //Start Col High
-    trans[1].tx_data[1] = 0;            //Start Col Low
-    trans[1].tx_data[2] = (320 - 1) >> 8;   //End Col High
-    trans[1].tx_data[3] = (320 - 1) & 0xff; //End Col Low
-    trans[2].tx_data[0] = 0x2B;         //Page address set
-    trans[3].tx_data[0] = ypos >> 8;    //Start page high
-    trans[3].tx_data[1] = ypos & 0xff;  //start page low
-    trans[3].tx_data[2] = (ypos + PARALLEL_LINES - 1) >> 8; //end page high
-    trans[3].tx_data[3] = (ypos + PARALLEL_LINES - 1) & 0xff; //end page low
-    trans[4].tx_data[0] = 0x2C;         //memory write
-    trans[5].tx_buffer = linedata;      //finally send the line data
-    trans[5].length = 320 * 2 * 8 * PARALLEL_LINES;  //Data length, in bits
-    trans[5].flags = 0; //undo SPI_TRANS_USE_TXDATA flag
+    trans[0].tx_data[0] = 0x2A;                               // Column Address Set
+    trans[1].tx_data[0] = 0;                                  // Start Col High
+    trans[1].tx_data[1] = 0;                                  // Start Col Low
+    trans[1].tx_data[2] = (320 - 1) >> 8;                     // End Col High
+    trans[1].tx_data[3] = (320 - 1) & 0xff;                   // End Col Low
+    trans[2].tx_data[0] = 0x2B;                               // Page address set
+    trans[3].tx_data[0] = ypos >> 8;                          // Start page high
+    trans[3].tx_data[1] = ypos & 0xff;                        // start page low
+    trans[3].tx_data[2] = (ypos + PARALLEL_LINES - 1) >> 8;   // end page high
+    trans[3].tx_data[3] = (ypos + PARALLEL_LINES - 1) & 0xff; // end page low
+    trans[4].tx_data[0] = 0x2C;                               // memory write
+    trans[5].tx_buffer = linedata;                            // finally send the line data
+    trans[5].length = 320 * 2 * 8 * PARALLEL_LINES;           // Data length, in bits
+    trans[5].flags = 0;                                       // undo SPI_TRANS_USE_TXDATA flag
 
-    //Queue all transactions.
-    for (x = 0; x < 6; x++) {
+    // Queue all transactions.
+    for (x = 0; x < 6; x++)
+    {
         ret = spi_device_queue_trans(spi, &trans[x], portMAX_DELAY);
         assert(ret == ESP_OK);
     }
 
-    //When we are here, the SPI driver is busy (in the background) getting the transactions sent. That happens
-    //mostly using DMA, so the CPU doesn't have much to do here. We're not going to wait for the transaction to
-    //finish because we may as well spend the time calculating the next line. When that is done, we can call
-    //send_line_finish, which will wait for the transfers to be done and check their status.
+    // When we are here, the SPI driver is busy (in the background) getting the transactions sent. That happens
+    // mostly using DMA, so the CPU doesn't have much to do here. We're not going to wait for the transaction to
+    // finish because we may as well spend the time calculating the next line. When that is done, we can call
+    // send_line_finish, which will wait for the transfers to be done and check their status.
 }
 
 static void send_line_finish(spi_device_handle_t spi)
 {
     spi_transaction_t *rtrans;
     esp_err_t ret;
-    //Wait for all 6 transactions to be done and get back the results.
-    for (int x = 0; x < 6; x++) {
+    // Wait for all 6 transactions to be done and get back the results.
+    for (int x = 0; x < 6; x++)
+    {
         ret = spi_device_get_trans_result(spi, &rtrans, portMAX_DELAY);
         assert(ret == ESP_OK);
-        //We could inspect rtrans now if we received any info back. The LCD is treated as write-only, though.
+        // We could inspect rtrans now if we received any info back. The LCD is treated as write-only, though.
     }
 }
 
-//Simple routine to generate some patterns and send them to the LCD. Don't expect anything too
-//impressive. Because the SPI driver handles transactions in the background, we can calculate the next line
-//while the previous one is being sent.
+// Simple routine to generate some patterns and send them to the LCD. Don't expect anything too
+// impressive. Because the SPI driver handles transactions in the background, we can calculate the next line
+// while the previous one is being sent.
 static void display_pretty_colors(spi_device_handle_t spi)
 {
     uint16_t *lines[2];
-    //Allocate memory for the pixel buffers
-    for (int i = 0; i < 2; i++) {
+    // Allocate memory for the pixel buffers
+    for (int i = 0; i < 2; i++)
+    {
         lines[i] = (uint16_t *)spi_bus_dma_memory_alloc(LCD_HOST, 320 * PARALLEL_LINES * sizeof(uint16_t), 0);
         assert(lines[i] != NULL);
     }
     int frame = 0;
-    //Indexes of the line currently being sent to the LCD and the line we're calculating.
+    // Indexes of the line currently being sent to the LCD and the line we're calculating.
     int sending_line = -1;
     int calc_line = 0;
 
-    while (1) {
+    while (1)
+    {
         frame++;
-        for (int y = 0; y < 240; y += PARALLEL_LINES) {
-            //Calculate a line.
+        for (int y = 0; y < 240; y += PARALLEL_LINES)
+        {
+            // Calculate a line.
             pretty_effect_calc_lines(lines[calc_line], y, frame, PARALLEL_LINES);
-            //Finish up the sending process of the previous line, if any
-            if (sending_line != -1) {
+            // Finish up the sending process of the previous line, if any
+            if (sending_line != -1)
+            {
                 send_line_finish(spi);
             }
-            //Swap sending_line and calc_line
+            // Swap sending_line and calc_line
             sending_line = calc_line;
             calc_line = (calc_line == 1) ? 0 : 1;
-            //Send the line we currently calculated.
+            // Send the line we currently calculated.
             send_lines(spi, y, lines[sending_line]);
-            //The line set is queued up for sending now; the actual sending happens in the
-            //background. We can go on to calculate the next line set as long as we do not
-            //touch line[sending_line]; the SPI sending process is still reading from that.
+            // The line set is queued up for sending now; the actual sending happens in the
+            // background. We can go on to calculate the next line set as long as we do not
+            // touch line[sending_line]; the SPI sending process is still reading from that.
         }
     }
 }
 
-
-
 uint16_t *pixels;
 
-//Grab a rgb16 pixel from the esp32_tiles image
+// Grab a rgb16 pixel from the esp32_tiles image
 static inline uint16_t get_bgnd_pixel(int x, int y)
 {
-    //Get color of the pixel on x,y coords
-    return (uint16_t) * (pixels + (y * IMAGE_W) + x);
+    // Get color of the pixel on x,y coords
+    return (uint16_t)*(pixels + (y * IMAGE_W) + x);
 }
 
-//This variable is used to detect the next frame.
+// This variable is used to detect the next frame.
 static int prev_frame = -1;
 
-//Instead of calculating the offsets for each pixel we grab, we pre-calculate the valueswhenever a frame changes, then re-use
-//these as we go through all the pixels in the frame. This is much, much faster.
+// Instead of calculating the offsets for each pixel we grab, we pre-calculate the valueswhenever a frame changes, then re-use
+// these as we go through all the pixels in the frame. This is much, much faster.
 static int8_t xofs[320], yofs[240];
 static int8_t xcomp[320], ycomp[240];
 
-//Calculate the pixel data for a set of lines (with implied line size of 320). Pixels go in dest, line is the Y-coordinate of the
-//first line to be calculated, linect is the amount of lines to calculate. Frame increases by one every time the entire image
-//is displayed; this is used to go to the next frame of animation.
+// Calculate the pixel data for a set of lines (with implied line size of 320). Pixels go in dest, line is the Y-coordinate of the
+// first line to be calculated, linect is the amount of lines to calculate. Frame increases by one every time the entire image
+// is displayed; this is used to go to the next frame of animation.
 void pretty_effect_calc_lines(uint16_t *dest, int line, int frame, int linect)
 {
-    if (frame != prev_frame) {
-        //We need to calculate a new set of offset coefficients. Take some random sines as offsets to make everything
-        //look pretty and fluid-y.
-        for (int x = 0; x < 320; x++) {
+    if (frame != prev_frame)
+    {
+        // We need to calculate a new set of offset coefficients. Take some random sines as offsets to make everything
+        // look pretty and fluid-y.
+        for (int x = 0; x < 320; x++)
+        {
             xofs[x] = sin(frame * 0.15 + x * 0.06) * 4;
         }
-        for (int y = 0; y < 240; y++) {
+        for (int y = 0; y < 240; y++)
+        {
             yofs[y] = sin(frame * 0.1 + y * 0.05) * 4;
         }
-        for (int x = 0; x < 320; x++) {
+        for (int x = 0; x < 320; x++)
+        {
             xcomp[x] = sin(frame * 0.11 + x * 0.12) * 4;
         }
-        for (int y = 0; y < 240; y++) {
+        for (int y = 0; y < 240; y++)
+        {
             ycomp[y] = sin(frame * 0.07 + y * 0.15) * 4;
         }
         prev_frame = frame;
     }
-    for (int y = line; y < line + linect; y++) {
-        for (int x = 0; x < 320; x++) {
+    for (int y = line; y < line + linect; y++)
+    {
+        for (int x = 0; x < 320; x++)
+        {
             *dest++ = get_bgnd_pixel(x + yofs[y] + xcomp[x], y + xofs[x] + ycomp[y]);
         }
     }
@@ -537,76 +575,254 @@ extern "C" void app_main(void)
     node_t *node = node::create(&node_config, app_attribute_update_cb, app_identification_cb);
     ABORT_APP_ON_FAILURE(node != nullptr, ESP_LOGE(TAG, "Failed to create Matter node"));
 
-    err = esp_matter::start(app_event_cb);
-    ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to start Matter, err:%d", err));
+    // err = esp_matter::start(app_event_cb);
+    // ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to start Matter, err:%d", err));
+
+    ESP_LOGI(TAG, "Setting up SPI...");
 
     spi_device_handle_t spi;
     spi_bus_config_t buscfg = {
-         .mosi_io_num = 11,
-         .miso_io_num = -1,
-         .sclk_io_num = 12,
-         .quadwp_io_num = -1,
-         .quadhd_io_num = -1,
-         .max_transfer_sz =  100 * 100 * sizeof(uint16_t),
+        .mosi_io_num = 11,
+        .miso_io_num = 13,
+        .sclk_io_num = 12,
+        .quadwp_io_num = -1,
+        .quadhd_io_num = -1,
+        .max_transfer_sz = 100 * 100 * sizeof(uint16_t),
     };
+
+    spi_device_interface_config_t devcfg = {
+        .mode = 0,                               // SPI mode 0
+        .clock_speed_hz = 400 * 1000,            // Clock out at 400 MHz
+        .spics_io_num = 45,                      // CS pin
+        .queue_size = 7,                         // We want to be able to queue 7 transactions at a time
+        .pre_cb = lcd_spi_pre_transfer_callback, // Specify pre-transfer callback to handle D/C line
+    };
+
     err = spi_bus_initialize(LCD_HOST, &buscfg, SPI_DMA_CH_AUTO);
     ESP_ERROR_CHECK(err);
 
-    esp_lcd_panel_io_spi_config_t io_config = {
-        .dc_gpio_num = TEST_LCD_DC_GPIO,
-        .cs_gpio_num = TEST_LCD_CS_GPIO,
-        .pclk_hz = TEST_LCD_PIXEL_CLOCK_HZ,
-        .spi_mode = 0,
-        .trans_queue_depth = 10,
-        .lcd_cmd_bits = cmd_bits,
-        .lcd_param_bits = param_bits,
-        .on_color_trans_done = on_color_trans_done,
-        .user_ctx = user_data,
-    };
+    err = spi_bus_add_device(LCD_HOST, &devcfg, &spi);
+    ESP_ERROR_CHECK(err);
 
-    esp_lcd_panel_io_handle_t io_handle = NULL;
+    // Reset the screen
+    //
+    // gpio_set_level((gpio_num_t)PIN_NUM_RST, 0);
+    // vTaskDelay(100 / portTICK_PERIOD_MS);
+    // gpio_set_level((gpio_num_t)PIN_NUM_RST, 1);
+    // vTaskDelay(100 / portTICK_PERIOD_MS);
 
-    esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_HOST, &io_config, io_handle)
-    
+    // spi_device_acquire_bus(spi, portMAX_DELAY);
 
-    const lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
-    esp_err_t err = lvgl_port_init(&lvgl_cfg);
+    // //get_id cmd
+    // lcd_cmd(spi, 0x04, true);
 
-    static lv_disp_t * disp_handle;
+    // spi_transaction_t t;
+    // memset(&t, 0, sizeof(t));
+    // t.length = 8 * 3;
+    // t.flags = SPI_TRANS_USE_RXDATA;
+    // t.user = (void*)1;
 
-    /* LCD IO */
-	esp_lcd_panel_io_handle_t io_handle = NULL;
-	ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t) 1, &io_config, &io_handle));
+    // esp_err_t ret = spi_device_polling_transmit(spi, &t);
+    // assert(ret == ESP_OK);
 
-    /* LCD driver initialization */
-    esp_lcd_panel_handle_t lcd_panel_handle;
-    ESP_ERROR_CHECK(esp_lcd_new_panel_st7789(io_handle, &panel_config, &lcd_panel_handle));
+    // // Release bus
+    // spi_device_release_bus(spi);
 
-    /* Add LCD screen */
-    const lvgl_port_display_cfg_t disp_cfg = {
-        .io_handle = io_handle,
-        .panel_handle = lcd_panel_handle,
-        .buffer_size = DISP_WIDTH*DISP_HEIGHT,
-        .double_buffer = true,
-        .hres = DISP_WIDTH,
-        .vres = DISP_HEIGHT,
-        .monochrome = false,
-        .mipi_dsi = false,
-        .color_format = LV_COLOR_FORMAT_RGB565,
-        .rotation = {
-            .swap_xy = false,
-            .mirror_x = false,
-            .mirror_y = false,
-        },
-        .flags = {
-            .buff_dma = true,
-            .swap_bytes = false,
+    // uint32_t id = *(uint32_t *)t.rx_data;
+
+    // ESP_LOGI(TAG,"DeviceId: %lu", id);
+
+    gpio_set_level((gpio_num_t)7, true);
+
+    ESP_LOGI(TAG, "Display powered up...");
+
+    spi_device_acquire_bus(spi, portMAX_DELAY);
+
+    gpio_config_t io_conf = {};
+    io_conf.pin_bit_mask = ((1ULL << PIN_NUM_DC) | (1ULL << PIN_NUM_RST));
+    io_conf.mode = GPIO_MODE_OUTPUT;
+    io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
+    gpio_config(&io_conf);
+
+    io_conf = {};
+    io_conf.pin_bit_mask = ((1ULL << PIN_NUM_BUSY));
+    io_conf.mode = GPIO_MODE_INPUT;
+    io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
+    gpio_config(&io_conf);
+
+    // Init the display
+    //
+    gpio_set_level((gpio_num_t)PIN_NUM_RST, true);
+    vTaskDelay(100 / portTICK_PERIOD_MS);
+    gpio_set_level((gpio_num_t)PIN_NUM_RST, false);
+    vTaskDelay(10 / portTICK_PERIOD_MS);
+    gpio_set_level((gpio_num_t)PIN_NUM_RST, true);
+    vTaskDelay(10 / portTICK_PERIOD_MS);
+
+    ESP_LOGI(TAG, "Waiting for reset to finish...");
+
+    while (1)
+    {
+        int level = gpio_get_level((gpio_num_t)PIN_NUM_BUSY);
+
+        if (level == 0)
+        {
+            break;
         }
-    };
-    disp_handle = lvgl_port_add_disp(&disp_cfg);
+    }
+
+    ESP_LOGI(TAG, "Reset complete. ");
+
+    lcd_cmd(spi, 0x12, true);
+
+    while (1)
+    {
+        int level = gpio_get_level((gpio_num_t)PIN_NUM_BUSY);
+
+        if (level == 0)
+        {
+            break;
+        }
+    }
+
+    ESP_LOGI(TAG, "Soft reset complete");
+
+    lcd_cmd(spi, 0x21, true);
+    lcd_data(spi, 0x40, true);
+    lcd_data(spi, 0x00, true);
+    lcd_cmd(spi, 0x3C, true);
+    lcd_data(spi, 0x05, true);
+    lcd_cmd(spi, 0x11, true);
+    lcd_data(spi, 0x03, true);
+
+    lcd_cmd(spi, 0x44, true);
+    lcd_data(spi, ((0 >> 3) & 0xFF), true);
+    lcd_data(spi, (399 >> 3) & 0xFF, true);
+
+    lcd_cmd(spi, 0x45, true);
+    lcd_data(spi, (0 & 0xFF), true);
+    lcd_data(spi, ((0 >> 8) & 0xFF), true);
+    lcd_data(spi, (299 & 0xFF), true);
+    lcd_data(spi, ((299 >> 8) & 0xFF), true);
+
+    // Cursor
+    lcd_cmd(spi, 0x4E, true);
+    lcd_data(spi, (0 & 0xFF), true);
+
+    lcd_cmd(spi, 0x4F, true);
+    lcd_data(spi, (0 & 0xFF), true);
+    lcd_data(spi, ((0 >> 8) & 0xFF), true);
+
+    while (1)
+    {
+        int level = gpio_get_level((gpio_num_t)PIN_NUM_BUSY);
+
+        if (level == 0)
+        {
+            break;
+        }
+    }
+
+    ESP_LOGI(TAG, "Init complete. Clearing screen...");
+
+    // lcd_cmd(spi, 0x24, true);
+
+    // for (int i = 0; i < 400; i++)
+    // {
+    //     for (int j = 0; j < 300; j++)
+    //     {
+    //         lcd_data(spi, 0xFF, true);
+    //     }
+    // }
+
+    // lcd_cmd(spi, 0x26, true);
+
+    // for (int i = 0; i < 400; i++)
+    // {
+    //     for (int j = 0; j < 300; j++)
+    //     {
+    //         lcd_data(spi, 0xFF, true);
+    //     }
+    // }
+
+    // lcd_cmd(spi, 0x22, true);
+    // lcd_data(spi, 0xF7, true);
+    // lcd_cmd(spi, 0x20, true);
+
+    // while (1)
+    // {
+    //     int level = gpio_get_level((gpio_num_t)PIN_NUM_BUSY);
+
+    //     if (level == 0)
+    //     {
+    //         break;
+    //     }
+    // }
+
+    spi_device_release_bus(spi);
+
+    // esp_lcd_panel_io_spi_config_t io_config = {
+    //     .cs_gpio_num = 45,
+    //     .dc_gpio_num = 46,
+    //     .spi_mode = 0,
+    //     .pclk_hz = 400*1000,
+    //     .trans_queue_depth = 10,
+    //     .lcd_cmd_bits = 8,
+    //     .lcd_param_bits = 8,
+    // };
+
+    // static lv_disp_t * disp_handle;
+
+    // /* LCD IO */
+    // esp_lcd_panel_io_handle_t io_handle = NULL;
+    // ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_HOST, &io_config, &io_handle));
+
+    // esp_lcd_panel_dev_config_t panel_config = {
+    //     .reset_gpio_num = 47,
+    //     .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
+    //     .bits_per_pixel = 16,
+    // };
+
+    // /* LCD driver initialization */
+    // esp_lcd_panel_handle_t lcd_panel_handle;
+    // ESP_ERROR_CHECK(esp_lcd_new_panel_st7789(io_handle, &panel_config, &lcd_panel_handle));
+    // ESP_ERROR_CHECK(esp_lcd_panel_reset(lcd_panel_handle));
+    // ESP_ERROR_CHECK(esp_lcd_panel_init(lcd_panel_handle));
+    // ESP_ERROR_CHECK(esp_lcd_panel_mirror(lcd_panel_handle, true, false));
+
+    // esp_lcd_panel_disp_on_off(lcd_panel_handle, true);
+
+    // const lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
+    // err = lvgl_port_init(&lvgl_cfg);
+
+    // /* Add LCD screen */
+    // const lvgl_port_display_cfg_t disp_cfg = {
+    //     .io_handle = io_handle,
+    //     .panel_handle = lcd_panel_handle,
+    //     .buffer_size = 100*100,
+    //     .double_buffer = false,
+    //     .hres = 100,
+    //     .vres = 100,
+    //     .monochrome = true,
+    //     .rotation = {
+    //         .swap_xy = false,
+    //         .mirror_x = false,
+    //         .mirror_y = false,
+    //     },
+    // };
+    // disp_handle = lvgl_port_add_disp(&disp_cfg);
+
+    // lv_obj_t *scr = lv_scr_act();
+
+    // lv_obj_t *mModeLabel = lv_label_create(scr);
+    // lv_label_set_text(mModeLabel, "Eco 50°"); // TODO Get this default from the DishwasherManager
+    // lv_obj_set_width(mModeLabel, 40);
+    // lv_obj_align(mModeLabel, LV_ALIGN_LEFT_MID, 0, 0);
+
+    // ESP_LOGI(TAG,"All done!");
 
     /* ... the rest of the initialization ... */
 
     /* If deinitializing LVGL port, remember to delete all displays: */
-    //lvgl_port_remove_disp(disp_handle);
+    // lvgl_port_remove_disp(disp_handle);
 }

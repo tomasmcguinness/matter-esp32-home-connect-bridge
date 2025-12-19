@@ -223,7 +223,7 @@ dependencies:
     component_hash: 17e68bfd21f0edf4c3ee838e2273da840bf3930e5dbc3bfa6c1190c3aed41f9f
     dependencies: []
     source:
-      registry_url: https://components.espressif.com
+      registry_url: https://components.espressif.com/
       type: service
     version: 9.4.0
 direct_dependencies:
@@ -240,6 +240,7 @@ direct_dependencies:
 - espressif/led_strip
 - espressif/mdns
 - idf
-manifest_hash: bc835a4abaaeffc0428f2e80d5839efe03ed481309f53ec9171ff903d8820297
+- lvgl/lvgl
+manifest_hash: 7566cbbee07cbd8c69662beb725c0dd8ba01b5cb402ce8108a54428d7d7e4cf3
 target: esp32s3
 version: 2.0.0
