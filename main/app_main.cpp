@@ -50,21 +50,11 @@ static const char *TAG = "app";
 
 #define LCD_HOST SPI2_HOST
 #define PARALLEL_LINES 16
-#define LCD_BK_LIGHT_ON_LEVEL 0
-#define PIN_NUM_CS 10
-#define PIN_NUM_DC 46
-#define PIN_NUM_RST 47
-#define PIN_NUM_BUSY 48
-
-#define IMAGE_W 400
-#define IMAGE_H 300
 
 using namespace esp_matter;
 
 #define MAX_HTTP_RECV_BUFFER 512
 #define MAX_HTTP_OUTPUT_BUFFER 20000
-
-static SemaphoreHandle_t panel_refreshing_sem = NULL;
 
 esp_err_t _http_event_handler(esp_http_client_event_t *evt)
 {
@@ -338,91 +328,7 @@ void lcd_spi_pre_transfer_callback(spi_transaction_t *t)
 #define EXAMPLE_LVGL_TASK_STACK_SIZE (4 * 1024)
 #define EXAMPLE_LVGL_TASK_PRIORITY 2
 
-static _lock_t lvgl_api_lock;
-
 #include <sys/param.h>
-
-static void example_lvgl_port_task(void *arg)
-{
-    ESP_LOGI(TAG, "Starting LVGL task");
-    uint32_t time_till_next_ms = 0;
-    while (1)
-    {
-        _lock_acquire(&lvgl_api_lock);
-        time_till_next_ms = lv_timer_handler();
-        _lock_release(&lvgl_api_lock);
-        // in case of triggering a task watch dog time out
-        time_till_next_ms = MAX(time_till_next_ms, EXAMPLE_LVGL_TASK_MIN_DELAY_MS);
-        // in case of lvgl display not ready yet
-        time_till_next_ms = MIN(time_till_next_ms, EXAMPLE_LVGL_TASK_MAX_DELAY_MS);
-        usleep(1000 * time_till_next_ms);
-    }
-}
-
-static bool example_notify_lvgl_flush_ready(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx)
-{
-    lv_display_t *disp = (lv_display_t *)user_ctx;
-    lv_display_flush_ready(disp);
-    return false;
-}
-
-static void example_lvgl_wait_cb(struct _lv_disp_drv_t *disp_drv)
-{
-    xSemaphoreTake(panel_refreshing_sem, portMAX_DELAY);
-}
-
-static void example_lvgl_port_update_callback(lv_display_t *disp)
-{
-    esp_lcd_panel_handle_t panel_handle = (esp_lcd_panel_handle_t)lv_display_get_user_data(disp);
-    lv_display_rotation_t rotation = (lv_display_rotation_t)lv_display_get_rotation(disp);
-
-    switch (rotation)
-    {
-    case LV_DISPLAY_ROTATION_0:
-        // Rotate LCD display
-        esp_lcd_panel_swap_xy(panel_handle, false);
-        esp_lcd_panel_mirror(panel_handle, true, false);
-        break;
-    case LV_DISPLAY_ROTATION_90:
-        // Rotate LCD display
-        esp_lcd_panel_swap_xy(panel_handle, true);
-        esp_lcd_panel_mirror(panel_handle, true, true);
-        break;
-    case LV_DISPLAY_ROTATION_180:
-        // Rotate LCD display
-        esp_lcd_panel_swap_xy(panel_handle, false);
-        esp_lcd_panel_mirror(panel_handle, false, true);
-        break;
-    case LV_DISPLAY_ROTATION_270:
-        // Rotate LCD display
-        esp_lcd_panel_swap_xy(panel_handle, true);
-        esp_lcd_panel_mirror(panel_handle, false, false);
-        break;
-    }
-}
-
-static uint8_t *converted_buffer_black;
-static uint8_t *converted_buffer_red;
-
-static void example_lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
-{
-    example_lvgl_port_update_callback(disp);
-    esp_lcd_panel_handle_t panel_handle = (esp_lcd_panel_handle_t)lv_display_get_user_data(disp);
-    int offsetx1 = area->x1;
-    int offsetx2 = area->x2;
-    int offsety1 = area->y1;
-    int offsety2 = area->y2;
-    // because SPI LCD is big-endian, we need to swap the RGB bytes order
-    lv_draw_sw_rgb565_swap(px_map, (offsetx2 + 1 - offsetx1) * (offsety2 + 1 - offsety1));
-    // copy a buffer's content to a specific area of the display
-    esp_lcd_panel_draw_bitmap(panel_handle, offsetx1, offsety1, offsetx2 + 1, offsety2 + 1, px_map);
-}
-
-static void example_increase_lvgl_tick(void *arg)
-{
-    /* Tell LVGL how many milliseconds has elapsed */
-    lv_tick_inc(EXAMPLE_LVGL_TICK_PERIOD_MS);
-}
 
 extern "C" void app_main(void)
 {
@@ -459,292 +365,33 @@ extern "C" void app_main(void)
 
     ESP_ERROR_CHECK(spi_bus_initialize(LCD_HOST, &buscfg, SPI_DMA_CH_AUTO));
 
+    ESP_LOGI(TAG, "Configuring Display Device...");
 
+    spi_device_interface_config_t devcfg = {
+        .mode = 0,                                  //SPI mode 0
+        .clock_speed_hz = 20 * 1000 * 1000,         //Clock out at 20 MHz
+        .spics_io_num = PIN_NUM_CS,                 //CS pin
+        .queue_size = 7,                            //We want to be able to queue 7 transactions at a time
+        .pre_cb = lcd_spi_pre_transfer_callback,    //Specify pre-transfer callback to handle D/C line
+    };
 
+    ESP_ERROR_CHECK(spi_bus_add_device(LCD_HOST, &devcfg, &spi));
 
+    gpio_config_t io_conf = {};
+    io_conf.pin_bit_mask = ((1ULL << PIN_NUM_DC) | (1ULL << PIN_NUM_RST) | (1ULL << 41) | (1ULL << 7) );
+    io_conf.mode = GPIO_MODE_OUTPUT;
+    io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
+    gpio_config(&io_conf);
 
+    gpio_set_level((gpio_num_t)41, true);
+    ESP_LOGI(TAG, "Applied power to LED");
 
-    // ESP_LOGI(TAG, "Install panel IO");
-    // esp_lcd_panel_io_handle_t io_handle = NULL;
-    // esp_lcd_panel_io_spi_config_t io_config = {
-    //     .cs_gpio_num = PIN_NUM_CS,
-    //     .dc_gpio_num = PIN_NUM_DC,
-    //     .spi_mode = 0,
-    //     .pclk_hz = 1000000,
-    //     .trans_queue_depth = 10,
-    //     .lcd_cmd_bits = 8,
-    //     .lcd_param_bits = 8,
-    // };
-    // // Attach the LCD to the SPI bus
-    // ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi(LCD_HOST, &io_config, &io_handle));
+    gpio_set_level((gpio_num_t)7, true);
+    ESP_LOGI(TAG, "Applied power to display");
 
-    // // esp_lcd_panel_handle_t panel_handle = NULL;
-    // // esp_lcd_panel_dev_config_t panel_config = {
-    // //     .reset_gpio_num = PIN_NUM_RST,
-    // //     .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_BGR,
-    // //     .bits_per_pixel = 16,
-    // // };
-    // // ESP_LOGI(TAG, "Install ST7789 panel driver");
-    // // ESP_ERROR_CHECK(esp_lcd_new_panel_st7789(io_handle, &panel_config, &panel_handle));
-    // // ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_handle));
-    // // ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle));
-    // // ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel_handle, true, false));
+    lcd_init(spi, IMAGE_W, IMAGE_H);
+    
+    lcd_clear(spi, IMAGE_W, IMAGE_H);
 
-    // gpio_set_level((gpio_num_t)7, true);
-    // ESP_LOGI(TAG, "Display powered up...");
-
-    // ESP_LOGI(TAG, "Creating SSD1681 panel...");
-    // esp_lcd_ssd1681_config_t epaper_ssd1681_config = {
-    //     .busy_gpio_num = PIN_NUM_BUSY,
-    //     // NOTE: Enable this to reduce one buffer copy if you do not use swap-xy, mirror y or invert color
-    //     // since those operations are not supported by ssd1681 and are implemented by software
-    //     // Better use DMA-capable memory region, to avoid additional data copy
-    //     .non_copy_mode = false,
-    // };
-    // esp_lcd_panel_dev_config_t panel_config = {
-    //     .reset_gpio_num = PIN_NUM_RST,
-    //     .flags = {
-    //         .reset_active_high = false,
-    //     },
-    //     .vendor_config = &epaper_ssd1681_config};
-    // esp_lcd_panel_handle_t panel_handle = NULL;
-    // // NOTE: Please call gpio_install_isr_service() manually before esp_lcd_new_panel_ssd1681()
-    // // because gpio_isr_handler_add() is called in esp_lcd_new_panel_ssd1681()
-    // gpio_install_isr_service(0);
-    // ESP_ERROR_CHECK(esp_lcd_new_panel_ssd1681(io_handle, &panel_config, &panel_handle));
-
-    // ESP_LOGI(TAG, "Resetting e-Paper display...");
-    // ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_handle));
-    // vTaskDelay(100 / portTICK_PERIOD_MS);
-
-    // ESP_LOGI(TAG, "Initializing e-Paper display...");
-    // ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle));
-    // vTaskDelay(100 / portTICK_PERIOD_MS);
-
-    // ESP_LOGI(TAG, "Turning e-Paper display on...");
-    // ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
-
-    // vTaskDelay(100 / portTICK_PERIOD_MS);
-
-    // static lv_disp_t *disp_handle;
-
-    // ESP_LOGI(TAG, "Initializing LVGL");
-    // const lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
-    // ESP_ERROR_CHECK(lvgl_port_init(&lvgl_cfg));
-
-    // ESP_LOGI(TAG, "Adding Display to LVGL");
-    // const lvgl_port_display_cfg_t disp_cfg = {
-    //     .io_handle = io_handle,
-    //     .panel_handle = panel_handle,
-    //     .buffer_size = IMAGE_H * IMAGE_W,
-    //     .double_buffer = false,
-    //     .trans_size = 8000,
-    //     .hres = IMAGE_H,
-    //     .vres = IMAGE_W,
-    //     .monochrome = true,
-    //     .rotation = {
-    //         .swap_xy = false,
-    //         .mirror_x = false,
-    //         .mirror_y = false,
-    //     },
-    //     .color_format = LV_COLOR_FORMAT_I1,
-    //     .flags = {
-    //         .buff_dma = false,
-    //         .buff_spiram = true,
-    //     }};
-    // disp_handle = lvgl_port_add_disp(&disp_cfg);
-
-    // ESP_LOGI(TAG, "Getting active screen");
-    // lv_obj_t *scr = lv_display_get_screen_active(disp_handle);
-
-    // ESP_LOGI(TAG, "Adding label");
-    // lv_obj_t *lbl = lv_label_create(scr);
-    // lv_label_set_text_static(lbl, LV_SYMBOL_REFRESH " ROTATE");
-
-    // ESP_LOGI(TAG, "Initialize LVGL library");
-    // lv_init();
-
-    // // create a lvgl display
-    // lv_display_t *display = lv_display_create(EXAMPLE_LCD_H_RES, EXAMPLE_LCD_V_RES);
-
-    // // alloc draw buffers used by LVGL
-    // // it's recommended to choose the size of the draw buffer(s) to be at least 1/10 screen sized
-    // size_t draw_buffer_sz = EXAMPLE_LCD_H_RES * EXAMPLE_LVGL_DRAW_BUF_LINES * sizeof(lv_color16_t);
-
-    // void *buf1 = spi_bus_dma_memory_alloc(LCD_HOST, draw_buffer_sz, 0);
-    // assert(buf1);
-    // void *buf2 = spi_bus_dma_memory_alloc(LCD_HOST, draw_buffer_sz, 0);
-    // assert(buf2);
-    // // initialize LVGL draw buffers
-    // lv_display_set_buffers(display, buf1, buf2, draw_buffer_sz, LV_DISPLAY_RENDER_MODE_PARTIAL);
-    // // associate the mipi panel handle to the display
-    // lv_display_set_user_data(display, panel_handle);
-    // // set color depth
-    // lv_display_set_color_format(display, LV_COLOR_FORMAT_RGB565);
-    // // set the callback which can copy the rendered image to an area of the display
-    // lv_display_set_flush_cb(display, example_lvgl_flush_cb);
-
-    // ESP_LOGI(TAG, "Install LVGL tick timer");
-    // // Tick interface for LVGL (using esp_timer to generate 2ms periodic event)
-    // const esp_timer_create_args_t lvgl_tick_timer_args = {
-    //     .callback = &example_increase_lvgl_tick,
-    //     .name = "lvgl_tick"};
-    // esp_timer_handle_t lvgl_tick_timer = NULL;
-    // ESP_ERROR_CHECK(esp_timer_create(&lvgl_tick_timer_args, &lvgl_tick_timer));
-    // ESP_ERROR_CHECK(esp_timer_start_periodic(lvgl_tick_timer, 2 * 1000));
-
-    // ESP_LOGI(TAG, "Register io panel event callback for LVGL flush ready notification");
-    // const esp_lcd_panel_io_callbacks_t cbs = {
-    //     .on_color_trans_done = example_notify_lvgl_flush_ready,
-    // };
-    // /* Register done callback */
-    // ESP_ERROR_CHECK(esp_lcd_panel_io_register_event_callbacks(io_handle, &cbs, display));
-
-    // ESP_LOGI(TAG, "Create LVGL task");
-    // xTaskCreate(example_lvgl_port_task, "LVGL", 4048, NULL, 5, NULL);
-
-    // ESP_LOGI(TAG, "Display LVGL Meter Widget");
-    // // Lock the mutex due to the LVGL APIs are not thread-safe
-    // _lock_acquire(&lvgl_api_lock);
-
-    // lv_obj_t *scr = lv_display_get_screen_active(display);
-
-    // lv_obj_t *lbl = lv_label_create(scr);
-    // lv_label_set_text_static(lbl, LV_SYMBOL_REFRESH " ROTATE");
-
-    // _lock_release(&lvgl_api_lock);
-
-    // err = spi_bus_add_device(LCD_HOST, &devcfg, &spi);
-    // ESP_ERROR_CHECK(err);
-
-    // gpio_set_level((gpio_num_t)7, true);
-
-    // ESP_LOGI(TAG, "Display powered up...");
-
-    // spi_device_acquire_bus(spi, portMAX_DELAY);
-
-    // gpio_config_t io_conf = {};
-    // io_conf.pin_bit_mask = ((1ULL << PIN_NUM_DC) | (1ULL << PIN_NUM_RST));
-    // io_conf.mode = GPIO_MODE_OUTPUT;
-    // io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
-    // gpio_config(&io_conf);
-
-    // io_conf = {};
-    // io_conf.pin_bit_mask = ((1ULL << PIN_NUM_BUSY));
-    // io_conf.mode = GPIO_MODE_INPUT;
-    // io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
-    // gpio_config(&io_conf);
-
-    // // Init the display
-    // //
-    // gpio_set_level((gpio_num_t)PIN_NUM_RST, true);
-    // vTaskDelay(100 / portTICK_PERIOD_MS);
-    // gpio_set_level((gpio_num_t)PIN_NUM_RST, false);
-    // vTaskDelay(10 / portTICK_PERIOD_MS);
-    // gpio_set_level((gpio_num_t)PIN_NUM_RST, true);
-    // vTaskDelay(10 / portTICK_PERIOD_MS);
-
-    // ESP_LOGI(TAG, "Waiting for reset to finish...");
-
-    // while (1)
-    // {
-    //     int level = gpio_get_level((gpio_num_t)PIN_NUM_BUSY);
-
-    //     if (level == 0)
-    //     {
-    //         break;
-    //     }
-    // }
-
-    // ESP_LOGI(TAG, "Reset complete. ");
-
-    // lcd_cmd(spi, 0x12, true);
-
-    // while (1)
-    // {
-    //     int level = gpio_get_level((gpio_num_t)PIN_NUM_BUSY);
-
-    //     if (level == 0)
-    //     {
-    //         break;
-    //     }
-    // }
-
-    // ESP_LOGI(TAG, "Soft reset complete");
-
-    // lcd_cmd(spi, 0x21, true);
-    // lcd_data(spi, 0x40, true);
-    // lcd_data(spi, 0x00, true);
-    // lcd_cmd(spi, 0x3C, true);
-    // lcd_data(spi, 0x05, true);
-    // lcd_cmd(spi, 0x11, true);
-    // lcd_data(spi, 0x03, true);
-
-    // lcd_cmd(spi, 0x44, true);
-    // lcd_data(spi, ((0 >> 3) & 0xFF), true);
-    // lcd_data(spi, (399 >> 3) & 0xFF, true);
-
-    // lcd_cmd(spi, 0x45, true);
-    // lcd_data(spi, (0 & 0xFF), true);
-    // lcd_data(spi, ((0 >> 8) & 0xFF), true);
-    // lcd_data(spi, (299 & 0xFF), true);
-    // lcd_data(spi, ((299 >> 8) & 0xFF), true);
-
-    // // Cursor
-    // lcd_cmd(spi, 0x4E, true);
-    // lcd_data(spi, (0 & 0xFF), true);
-
-    // lcd_cmd(spi, 0x4F, true);
-    // lcd_data(spi, (0 & 0xFF), true);
-    // lcd_data(spi, ((0 >> 8) & 0xFF), true);
-
-    // while (1)
-    // {
-    //     int level = gpio_get_level((gpio_num_t)PIN_NUM_BUSY);
-
-    //     if (level == 0)
-    //     {
-    //         break;
-    //     }
-    // }
-
-    // ESP_LOGI(TAG, "Init complete. Clearing screen...");
-
-    // lcd_cmd(spi, 0x24, true);
-
-    // for (int i = 0; i < 400; i++)
-    // {
-    //     for (int j = 0; j < 300; j++)
-    //     {
-    //         lcd_data(spi, 0xFF, true);
-    //     }
-    // }
-
-    // lcd_cmd(spi, 0x26, true);
-
-    // for (int i = 0; i < 400; i++)
-    // {
-    //     for (int j = 0; j < 300; j++)
-    //     {
-    //         lcd_data(spi, 0xFF, true);
-    //     }
-    // }
-
-    // lcd_cmd(spi, 0x22, true);
-    // lcd_data(spi, 0xF7, true);
-    // lcd_cmd(spi, 0x20, true);
-
-    // while (1)
-    // {
-    //     int level = gpio_get_level((gpio_num_t)PIN_NUM_BUSY);
-
-    //     if (level == 0)
-    //     {
-    //         break;
-    //     }
-    // }
-
-    // spi_device_release_bus(spi);
-
-    // ESP_LOGI(TAG,"All done!");
+    ESP_LOGI(TAG,"All done!");
 }
