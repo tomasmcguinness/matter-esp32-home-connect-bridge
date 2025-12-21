@@ -52,7 +52,7 @@ void lcd_reset()
     vTaskDelay(10 / portTICK_PERIOD_MS);
 }
 
-void lcd_init(spi_device_handle_t spi, uint16_t width, uint16_t height)
+void lcd_init(spi_device_handle_t spi)
 {
     lcd_reset();
     lcd_read_busy();
@@ -66,18 +66,18 @@ void lcd_init(spi_device_handle_t spi, uint16_t width, uint16_t height)
     lcd_write_cmd(spi, 0x3C); // BorderWavefrom
     lcd_write_data(spi, 0x05);
 
-    lcd_write_cmd(spi, 0x11);   // data  entry  mode
+    lcd_write_cmd(spi, 0x11);  // data  entry  mode
     lcd_write_data(spi, 0x03); // X-mode
 
     lcd_write_cmd(spi, 0x44);
     lcd_write_data(spi, (0 >> 3) & 0xFF);
-    lcd_write_data(spi, (width >> 3) & 0xFF);
+    lcd_write_data(spi, ((IMAGE_W - 1) >> 3) & 0xFF);
 
     lcd_write_cmd(spi, 0x45);
     lcd_write_data(spi, 0 & 0xFF);
     lcd_write_data(spi, (0 >> 8) & 0xFF);
-    lcd_write_data(spi, height & 0xFF);
-    lcd_write_data(spi, (height >> 8) & 0xFF);
+    lcd_write_data(spi, (IMAGE_H - 1) & 0xFF);
+    lcd_write_data(spi, ((IMAGE_H - 1) >> 8) & 0xFF);
 
     // Cursor
     lcd_write_cmd(spi, 0x4E); // SET_RAM_X_ADDRESS_COUNTER
@@ -98,29 +98,36 @@ void lcd_update(spi_device_handle_t spi)
     lcd_read_busy();
 }
 
-void lcd_clear(spi_device_handle_t spi, uint16_t width, uint16_t height)
+void lcd_clear(spi_device_handle_t spi)
 {
     uint16_t i, j, w, h;
-    w = (width % 8 == 0) ? (width / 8) : (width / 8 + 1);
-    h = height;
+    w = IMAGE_W / 8;
+    h = IMAGE_H;
 
+    // Write black (0xFF)
+    //
     lcd_write_cmd(spi, 0x24);
 
     for (j = 0; j < h; j++)
     {
         for (i = 0; i < w; i++)
         {
-            lcd_write_data(spi, 0x00);
+            lcd_write_data(spi, 0xFF);
         }
     }
 
-    lcd_write_cmd(spi, 0x26);
-    for (j = 0; j < h; j++)
+    lcd_update(spi);
+}
+
+void lcd_draw(spi_device_handle_t spi, std::vector<uint8_t> buffer)
+{
+    uint16_t i;
+
+    lcd_write_cmd(spi, 0x24);
+
+    for (i = 0; i < buffer.size(); i++)
     {
-        for (i = 0; i < w; i++)
-        {
-            lcd_write_data(spi, 0x00);
-        }
+        lcd_write_data(spi, buffer[i]);
     }
 
     lcd_update(spi);

@@ -21,18 +21,6 @@
 #include "driver/gpio.h"
 
 #include <math.h>
-#include "jpeg_decoder.h"
-
-#include <string>
-
-#include "esp_lcd_panel_ssd1681.h"
-
-#include "esp_lcd_panel_io.h"
-#include "esp_lcd_panel_ops.h"
-#include "esp_lcd_panel_vendor.h"
-#include "esp_lvgl_port.h"
-
-#include "lvgl.h"
 
 #include "esp_tls.h"
 #include "esp_http_client.h"
@@ -42,9 +30,11 @@
 
 #include "cJSON.h"
 
-#include "lvgl.h"
+#include "qrcode.h"
 
 #include "ssd1683.h"
+
+#include <vector>
 
 static const char *TAG = "app";
 
@@ -277,41 +267,6 @@ static esp_err_t app_attribute_update_cb(attribute::callback_type_t type, uint16
     return err;
 }
 
-/* Send a command to the LCD. Uses spi_device_polling_transmit, which waits
- * until the transfer is complete.
- *
- * Since command transactions are usually small, they are handled in polling
- * mode for higher speed. The overhead of interrupt transactions is more than
- * just waiting for the transaction to complete.
- */
-void lcd_cmd(spi_device_handle_t spi, const uint8_t cmd, bool keep_cs_active)
-{
-    esp_err_t ret;
-    spi_transaction_t t;
-    memset(&t, 0, sizeof(t)); // Zero out the transaction
-    t.length = 8;             // Command is 8 bits
-    t.tx_buffer = &cmd;       // The data is the cmd itself
-    t.user = (void *)0;       // D/C needs to be set to 0
-    // if (keep_cs_active)
-    // {
-    //     t.flags = SPI_TRANS_CS_KEEP_ACTIVE; // Keep CS active after data transfer
-    // }
-    ret = spi_device_polling_transmit(spi, &t); // Transmit!
-    assert(ret == ESP_OK);                      // Should have had no issues.
-}
-
-void lcd_data(spi_device_handle_t spi, const uint8_t data, bool keep_cs_active)
-{
-    esp_err_t ret;
-    spi_transaction_t t;
-    memset(&t, 0, sizeof(t));                   // Zero out the transaction
-    t.length = 8;                               // Command is 8 bits
-    t.tx_buffer = &data;                        // The data is the cmd itself
-    t.user = (void *)1;                         // D/C needs to be set to 1
-    ret = spi_device_polling_transmit(spi, &t); // Transmit!
-    assert(ret == ESP_OK);                      // Should have had no issues.
-}
-
 // set the D/C line to the value indicated in the user field.
 void lcd_spi_pre_transfer_callback(spi_transaction_t *t)
 {
@@ -330,8 +285,58 @@ void lcd_spi_pre_transfer_callback(spi_transaction_t *t)
 
 #include <sys/param.h>
 
+spi_device_handle_t spi;
+std::vector<uint8_t> buffer = {};
+
+void esp_qrcode_print_display(esp_qrcode_handle_t qrcode)
+{
+    ESP_LOGI(TAG, "Displaying the QR Code");
+
+    int size = esp_qrcode_get_size(qrcode);
+    
+    bool black_pixel = 0;
+
+    ESP_LOGI(TAG, "Size: %d", size);
+
+    for (int y = 0; y < IMAGE_H; y++)
+    {
+        for (int x = 0; x < IMAGE_W; x++)
+        {
+            black_pixel = esp_qrcode_get_module(qrcode, x, y);
+
+            uint16_t addr = x / 8 + y * 3;
+            uint8_t current = buffer[addr];
+
+            ESP_LOGI(TAG, "%d,%d %d", x, y, black_pixel);
+
+            if (black_pixel) // Set the bit to 1
+            {
+                buffer[addr] = current & ~(0x80 >> (x % 8));
+            }
+            else
+            {
+                buffer[addr] = current | (0x80 >> (x % 8));
+            }
+        }
+    }
+
+    lcd_draw(spi, buffer);
+}
+
 extern "C" void app_main(void)
 {
+    uint16_t w = IMAGE_W / 8;
+    uint16_t h = IMAGE_H;
+
+    for (int j = 0; j < h; j++)
+    {
+        for (int i = 0; i < w; i++)
+        {
+            buffer.push_back(0xFF); // White
+        }
+    }
+    ESP_LOGI(TAG, "Buffer: %d", buffer.size());
+
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND)
     {
@@ -353,7 +358,6 @@ extern "C" void app_main(void)
 
     ESP_LOGI(TAG, "Setting up SPI...");
 
-    spi_device_handle_t spi;
     spi_bus_config_t buscfg = {
         .mosi_io_num = 11,
         .miso_io_num = 13,
@@ -368,17 +372,17 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "Configuring Display Device...");
 
     spi_device_interface_config_t devcfg = {
-        .mode = 0,                                  //SPI mode 0
-        .clock_speed_hz = 20 * 1000 * 1000,         //Clock out at 20 MHz
-        .spics_io_num = PIN_NUM_CS,                 //CS pin
-        .queue_size = 7,                            //We want to be able to queue 7 transactions at a time
-        .pre_cb = lcd_spi_pre_transfer_callback,    //Specify pre-transfer callback to handle D/C line
+        .mode = 0,                               // SPI mode 0
+        .clock_speed_hz = 20 * 1000 * 1000,      // Clock out at 20 MHz
+        .spics_io_num = PIN_NUM_CS,              // CS pin
+        .queue_size = 7,                         // We want to be able to queue 7 transactions at a time
+        .pre_cb = lcd_spi_pre_transfer_callback, // Specify pre-transfer callback to handle D/C line
     };
 
     ESP_ERROR_CHECK(spi_bus_add_device(LCD_HOST, &devcfg, &spi));
 
     gpio_config_t io_conf = {};
-    io_conf.pin_bit_mask = ((1ULL << PIN_NUM_DC) | (1ULL << PIN_NUM_RST) | (1ULL << 41) | (1ULL << 7) );
+    io_conf.pin_bit_mask = ((1ULL << PIN_NUM_DC) | (1ULL << PIN_NUM_RST) | (1ULL << 41) | (1ULL << 7));
     io_conf.mode = GPIO_MODE_OUTPUT;
     io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
     gpio_config(&io_conf);
@@ -389,9 +393,15 @@ extern "C" void app_main(void)
     gpio_set_level((gpio_num_t)7, true);
     ESP_LOGI(TAG, "Applied power to display");
 
-    lcd_init(spi, IMAGE_W, IMAGE_H);
-    
-    lcd_clear(spi, IMAGE_W, IMAGE_H);
+    lcd_init(spi);
 
-    ESP_LOGI(TAG,"All done!");
+    lcd_clear(spi);
+
+    esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
+    cfg.display_func = esp_qrcode_print_display;
+
+    ESP_LOGI(TAG, "Scan below QR Code to configure the enrollee:");
+    esp_qrcode_generate(&cfg, "TEST");
+
+    ESP_LOGI(TAG, "All done!");
 }
