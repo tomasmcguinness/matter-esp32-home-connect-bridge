@@ -15,6 +15,8 @@
 
 #include <esp_matter.h>
 #include <app/server/Server.h>
+#include <setup_payload/OnboardingCodesUtil.h>
+#include <setup_payload/QRCodeSetupPayloadGenerator.h>
 
 #include "esp_system.h"
 #include "driver/spi_master.h"
@@ -35,6 +37,7 @@
 #include "ssd1683.h"
 
 #include <vector>
+#include <format>
 
 static const char *TAG = "app";
 
@@ -46,6 +49,47 @@ using namespace esp_matter;
 #define MAX_HTTP_RECV_BUFFER 512
 #define MAX_HTTP_OUTPUT_BUFFER 20000
 
+spi_device_handle_t spi;
+std::vector<uint8_t> buffer = {};
+
+void esp_qrcode_print_display(esp_qrcode_handle_t qrcode)
+{
+    ESP_LOGI(TAG, "Displaying the QR Code");
+
+    // Reset the image to full white.
+    std::fill(buffer.begin(), buffer.end(), 0xFF);
+
+    int size = esp_qrcode_get_size(qrcode);
+
+    bool black_pixel = 0;
+
+    // ESP_LOGI(TAG, "Size: %d", size);
+
+    for (int y = 0; y < size; y++)
+    {
+        for (int x = 0; x < size; x++)
+        {
+            black_pixel = esp_qrcode_get_module(qrcode, x, y);
+
+            uint16_t addr = x / 8 + y * (IMAGE_W / 8);
+            uint8_t current = buffer[addr];
+
+            // ESP_LOGI(TAG, "%d,%d %d", x, y, black_pixel);
+
+            if (black_pixel) // Set the bit to 1
+            {
+                buffer[addr] = current & ~(0x80 >> (x % 8));
+            }
+            else
+            {
+                buffer[addr] = current | (0x80 >> (x % 8));
+            }
+        }
+    }
+
+    lcd_draw(spi, buffer);
+}
+
 esp_err_t _http_event_handler(esp_http_client_event_t *evt)
 {
     static char *output_buffer; // Buffer to store response of http request from event handler
@@ -54,20 +98,20 @@ esp_err_t _http_event_handler(esp_http_client_event_t *evt)
     switch (evt->event_id)
     {
     case HTTP_EVENT_ERROR:
-        ESP_LOGI(TAG, "HTTP_EVENT_ERROR");
+        // ESP_LOGI(TAG, "HTTP_EVENT_ERROR");
         break;
     case HTTP_EVENT_ON_CONNECTED:
-        ESP_LOGI(TAG, "HTTP_EVENT_ON_CONNECTED");
+        // ESP_LOGI(TAG, "HTTP_EVENT_ON_CONNECTED");
         break;
     case HTTP_EVENT_HEADER_SENT:
-        ESP_LOGI(TAG, "HTTP_EVENT_HEADER_SENT");
+        // ESP_LOGI(TAG, "HTTP_EVENT_HEADER_SENT");
         break;
     case HTTP_EVENT_ON_HEADER:
-        ESP_LOGI(TAG, "HTTP_EVENT_ON_HEADER, key=%s, value=%s", evt->header_key, evt->header_value);
+        // ESP_LOGI(TAG, "HTTP_EVENT_ON_HEADER, key=%s, value=%s", evt->header_key, evt->header_value);
         break;
     case HTTP_EVENT_ON_DATA:
-        ESP_LOGI(TAG, "HTTP_EVENT_ON_DATA, len=%d", evt->data_len);
-        // Clean the buffer in case of a new request
+        // ESP_LOGI(TAG, "HTTP_EVENT_ON_DATA, len=%d", evt->data_len);
+        //  Clean the buffer in case of a new request
         if (output_len == 0 && evt->user_data)
         {
             // we are just starting to copy the output data into the use
@@ -125,7 +169,7 @@ esp_err_t _http_event_handler(esp_http_client_event_t *evt)
         break;
     case HTTP_EVENT_DISCONNECTED:
     {
-        ESP_LOGI(TAG, "HTTP_EVENT_DISCONNECTED");
+        ESP_LOGE(TAG, "HTTP_EVENT_DISCONNECTED");
         int mbedtls_err = 0;
         esp_err_t err = esp_tls_get_and_clear_last_error((esp_tls_error_handle_t)evt->data, &mbedtls_err, NULL);
         if (err != 0)
@@ -142,7 +186,7 @@ esp_err_t _http_event_handler(esp_http_client_event_t *evt)
     }
     break;
     case HTTP_EVENT_REDIRECT:
-        ESP_LOGI(TAG, "HTTP_EVENT_REDIRECT");
+        // ESP_LOGI(TAG, "HTTP_EVENT_REDIRECT");
         esp_http_client_set_header(evt->client, "From", "user@example.com");
         esp_http_client_set_header(evt->client, "Accept", "text/html");
         esp_http_client_set_redirection(evt->client);
@@ -156,6 +200,8 @@ esp_err_t _http_event_handler(esp_http_client_event_t *evt)
 
 static void start_device_flow(void *param)
 {
+    ESP_LOGI(TAG, "Starting device flow");
+
     char *local_response_buffer = (char *)malloc(MAX_HTTP_OUTPUT_BUFFER + 1);
 
     esp_http_client_config_t config = {
@@ -188,8 +234,8 @@ static void start_device_flow(void *param)
             return;
         }
 
-        const cJSON *deviceCodeJSON = cJSON_GetObjectItemCaseSensitive(root, "deviceCode");
-        // ESP_LOGI(TAG, "deviceCode: %d", countJSON->valuedouble);
+        const cJSON *deviceCodeJSON = cJSON_GetObjectItemCaseSensitive(root, "device_code");
+        ESP_LOGI(TAG, "device_code: %s", deviceCodeJSON->valuestring);
 
         const cJSON *nextJSON = cJSON_GetObjectItemCaseSensitive(root, "user_code");
         ESP_LOGI(TAG, "user_code: %s", nextJSON->valuestring);
@@ -198,7 +244,12 @@ static void start_device_flow(void *param)
         ESP_LOGI(TAG, "verification_uri: %s", verificationUriJSON->valuestring);
 
         const cJSON *completeVerificationUriJSON = cJSON_GetObjectItemCaseSensitive(root, "verification_uri_complete");
-        ESP_LOGI(TAG, "complete verification_uri: %s", completeVerificationUriJSON->valuestring);
+        ESP_LOGI(TAG, "verification_uri_complete: %s", completeVerificationUriJSON->valuestring);
+
+        esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
+        cfg.display_func = esp_qrcode_print_display;
+
+        esp_qrcode_generate(&cfg, completeVerificationUriJSON->valuestring);
 
         // We now need to wait for the user to authorize.
         //
@@ -206,11 +257,17 @@ static void start_device_flow(void *param)
         esp_http_client_set_method(client, HTTP_METHOD_POST);
         esp_http_client_set_header(client, "Content-Type", "application/x-www-form-urlencoded");
 
-        const char *post_data = "grant_type=device_code&device_code=&client_id=EAEC454A48CC2D7B95D43D5776F6049114E286CFA1D16E3D494AC67CF418F3E6";
+        char post_data[200];
+        snprintf(post_data, sizeof(post_data), "grant_type=device_code&device_code=%s&client_id=EAEC454A48CC2D7B95D43D5776F6049114E286CFA1D16E3D494AC67CF418F3E6", deviceCodeJSON->valuestring);
+
+        ESP_LOGI(TAG, "Code: %s", post_data);
+
         esp_http_client_set_post_field(client, post_data, strlen(post_data));
 
         while (1)
         {
+            ESP_LOGI(TAG, "Checking for token...");
+
             esp_err_t err = esp_http_client_perform(client);
 
             if (err == ESP_OK)
@@ -218,13 +275,31 @@ static void start_device_flow(void *param)
                 ESP_LOGI(TAG, "HTTP POST Status = %d, content_length = %" PRId64,
                          esp_http_client_get_status_code(client),
                          esp_http_client_get_content_length(client));
+
+                cJSON *root = cJSON_Parse(local_response_buffer);
+
+                if (root == NULL)
+                {
+                    ESP_LOGE(TAG, "Failed to parse JSON");
+                    return;
+                }
+
+                const cJSON *accessTokenJSON = cJSON_GetObjectItemCaseSensitive(root, "access_token");
+                ESP_LOGI(TAG, "access_token: %s", accessTokenJSON->valuestring);
+
+                const cJSON *refreshTokenJSON = cJSON_GetObjectItemCaseSensitive(root, "refresh_token");
+                ESP_LOGI(TAG, "refresh_token: %s", refreshTokenJSON->valuestring);
+
+                // Save these somewhere.
+                //
+                // Stop the task.
             }
             else
             {
                 ESP_LOGE(TAG, "HTTP GET request failed: %s", esp_err_to_name(err));
             }
 
-            vTaskDelay(5000 / portTICK_PERIOD_MS);
+            vTaskDelay(10000 / portTICK_PERIOD_MS);
         }
     }
     else
@@ -248,6 +323,32 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
             //
             xTaskCreate(start_device_flow, "StartDeviceFlow", 4 * 1024, NULL, 5, NULL);
         }
+        break;
+    case chip::DeviceLayer::DeviceEventType::kCommissioningComplete:
+        ESP_LOGI(TAG, "Commissioning complete");
+        lcd_clear(spi);
+        break;
+    case chip::DeviceLayer::DeviceEventType::kCommissioningWindowOpened:
+        ESP_LOGI(TAG, "Commissioning window opened");
+        {
+
+            chip::RendezvousInformationFlags rendezvoudFlags = chip::RendezvousInformationFlags(chip::RendezvousInformationFlag::kBLE);
+
+            chip::PayloadContents payload;
+            GetPayloadContents(payload, rendezvoudFlags);
+
+            char payloadBuffer[chip::QRCodeBasicSetupPayloadGenerator::kMaxQRCodeBase38RepresentationLength + 1];
+            chip::MutableCharSpan qrCode(payloadBuffer);
+
+            esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
+            cfg.display_func = esp_qrcode_print_display;
+
+            if (GetQRCode(qrCode, payload) == CHIP_NO_ERROR)
+            {
+                esp_qrcode_generate(&cfg, qrCode.data());
+            }
+        }
+
         break;
     default:
         break;
@@ -274,55 +375,6 @@ void lcd_spi_pre_transfer_callback(spi_transaction_t *t)
     gpio_set_level((gpio_num_t)PIN_NUM_DC, dc);
 }
 
-#define EXAMPLE_LVGL_DRAW_BUF_LINES 20
-#define EXAMPLE_LCD_H_RES 400
-#define EXAMPLE_LCD_V_RES 300
-#define EXAMPLE_LVGL_TICK_PERIOD_MS 2
-#define EXAMPLE_LVGL_TASK_MAX_DELAY_MS 500
-#define EXAMPLE_LVGL_TASK_MIN_DELAY_MS 1000 / CONFIG_FREERTOS_HZ
-#define EXAMPLE_LVGL_TASK_STACK_SIZE (4 * 1024)
-#define EXAMPLE_LVGL_TASK_PRIORITY 2
-
-#include <sys/param.h>
-
-spi_device_handle_t spi;
-std::vector<uint8_t> buffer = {};
-
-void esp_qrcode_print_display(esp_qrcode_handle_t qrcode)
-{
-    ESP_LOGI(TAG, "Displaying the QR Code");
-
-    int size = esp_qrcode_get_size(qrcode);
-    
-    bool black_pixel = 0;
-
-    ESP_LOGI(TAG, "Size: %d", size);
-
-    for (int y = 0; y < IMAGE_H; y++)
-    {
-        for (int x = 0; x < IMAGE_W; x++)
-        {
-            black_pixel = esp_qrcode_get_module(qrcode, x, y);
-
-            uint16_t addr = x / 8 + y * 3;
-            uint8_t current = buffer[addr];
-
-            ESP_LOGI(TAG, "%d,%d %d", x, y, black_pixel);
-
-            if (black_pixel) // Set the bit to 1
-            {
-                buffer[addr] = current & ~(0x80 >> (x % 8));
-            }
-            else
-            {
-                buffer[addr] = current | (0x80 >> (x % 8));
-            }
-        }
-    }
-
-    lcd_draw(spi, buffer);
-}
-
 extern "C" void app_main(void)
 {
     uint16_t w = IMAGE_W / 8;
@@ -347,14 +399,6 @@ extern "C" void app_main(void)
         /* Retry nvs_flash_init */
         ESP_ERROR_CHECK(nvs_flash_init());
     }
-
-    // node::config_t node_config;
-
-    // node_t *node = node::create(&node_config, app_attribute_update_cb, app_identification_cb);
-    // ABORT_APP_ON_FAILURE(node != nullptr, ESP_LOGE(TAG, "Failed to create Matter node"));
-
-    // err = esp_matter::start(app_event_cb);
-    //  ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to start Matter, err:%d", err));
 
     ESP_LOGI(TAG, "Setting up SPI...");
 
@@ -397,11 +441,13 @@ extern "C" void app_main(void)
 
     lcd_clear(spi);
 
-    esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
-    cfg.display_func = esp_qrcode_print_display;
+    node::config_t node_config;
 
-    ESP_LOGI(TAG, "Scan below QR Code to configure the enrollee:");
-    esp_qrcode_generate(&cfg, "TEST");
+    node_t *node = node::create(&node_config, app_attribute_update_cb, app_identification_cb);
+    ABORT_APP_ON_FAILURE(node != nullptr, ESP_LOGE(TAG, "Failed to create Matter node"));
+
+    err = esp_matter::start(app_event_cb);
+    ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to start Matter, err:%d", err));
 
     ESP_LOGI(TAG, "All done!");
 }
