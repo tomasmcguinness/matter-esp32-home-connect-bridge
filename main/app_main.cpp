@@ -41,6 +41,8 @@
 
 static const char *TAG = "app";
 
+#define NVS_NAMESPACE "home_connect"
+
 #define LCD_HOST SPI2_HOST
 #define PARALLEL_LINES 16
 
@@ -206,13 +208,13 @@ static void start_device_flow(void *param)
 
     esp_http_client_config_t config = {
         .url = "https://api.home-connect.com/security/oauth/device_authorization",
+        .method = HTTP_METHOD_POST,
         .event_handler = _http_event_handler,
         .user_data = local_response_buffer,
         .crt_bundle_attach = esp_crt_bundle_attach,
     };
     esp_http_client_handle_t client = esp_http_client_init(&config);
 
-    esp_http_client_set_method(client, HTTP_METHOD_POST);
     esp_http_client_set_header(client, "Content-Type", "application/x-www-form-urlencoded");
 
     const char *post_data = "client_id=EAEC454A48CC2D7B95D43D5776F6049114E286CFA1D16E3D494AC67CF418F3E6";
@@ -237,8 +239,8 @@ static void start_device_flow(void *param)
         const cJSON *deviceCodeJSON = cJSON_GetObjectItemCaseSensitive(root, "device_code");
         ESP_LOGI(TAG, "device_code: %s", deviceCodeJSON->valuestring);
 
-        const cJSON *nextJSON = cJSON_GetObjectItemCaseSensitive(root, "user_code");
-        ESP_LOGI(TAG, "user_code: %s", nextJSON->valuestring);
+        const cJSON *userCodeJSON = cJSON_GetObjectItemCaseSensitive(root, "user_code");
+        ESP_LOGI(TAG, "user_code: %s", userCodeJSON->valuestring);
 
         const cJSON *verificationUriJSON = cJSON_GetObjectItemCaseSensitive(root, "verification_uri");
         ESP_LOGI(TAG, "verification_uri: %s", verificationUriJSON->valuestring);
@@ -254,8 +256,6 @@ static void start_device_flow(void *param)
         // We now need to wait for the user to authorize.
         //
         esp_http_client_set_url(client, "https://api.home-connect.com/security/oauth/token");
-        esp_http_client_set_method(client, HTTP_METHOD_POST);
-        esp_http_client_set_header(client, "Content-Type", "application/x-www-form-urlencoded");
 
         char post_data[200];
         snprintf(post_data, sizeof(post_data), "grant_type=device_code&device_code=%s&client_id=EAEC454A48CC2D7B95D43D5776F6049114E286CFA1D16E3D494AC67CF418F3E6", deviceCodeJSON->valuestring);
@@ -276,35 +276,87 @@ static void start_device_flow(void *param)
                          esp_http_client_get_status_code(client),
                          esp_http_client_get_content_length(client));
 
-                cJSON *root = cJSON_Parse(local_response_buffer);
-
-                if (root == NULL)
+                if (esp_http_client_get_status_code(client) == 200)
                 {
-                    ESP_LOGE(TAG, "Failed to parse JSON");
-                    return;
+                    cJSON *root = cJSON_Parse(local_response_buffer);
+
+                    if (root == NULL)
+                    {
+                        ESP_LOGE(TAG, "Failed to parse JSON");
+                        return;
+                    }
+
+                    const cJSON *accessTokenJSON = cJSON_GetObjectItemCaseSensitive(root, "access_token");
+                    ESP_LOGI(TAG, "access_token: %s", accessTokenJSON->valuestring);
+
+                    const cJSON *refreshTokenJSON = cJSON_GetObjectItemCaseSensitive(root, "refresh_token");
+                    ESP_LOGI(TAG, "refresh_token: %s", refreshTokenJSON->valuestring);
+
+                    nvs_handle_t nvs_handle;
+                    esp_err_t err;
+
+                    err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
+                    if (err == ESP_OK)
+                    {
+                        nvs_set_str(nvs_handle, "access_token", accessTokenJSON->valuestring);
+                        nvs_set_str(nvs_handle, "refresh_token", refreshTokenJSON->valuestring);
+                        nvs_commit(nvs_handle);
+                    }
+                    nvs_close(nvs_handle);
+
+                    // Fetch the devices.
+                    //
+                    esp_http_client_set_url(client, "https://api.home-connect.com/api/homeappliances");
+
+                    char auth_header[1400];
+                    snprintf(auth_header, sizeof(auth_header), "Bearer %s", accessTokenJSON->valuestring);
+
+                    esp_http_client_set_header(client, "Authorization", auth_header);
+
+                    err = esp_http_client_perform(client);
+
+                    if (err == ESP_OK)
+                    {
+                        ESP_LOGI(TAG, "HTTP POST Status = %d, content_length = %" PRId64,
+                                 esp_http_client_get_status_code(client),
+                                 esp_http_client_get_content_length(client));
+
+                        if (esp_http_client_get_status_code(client) == 200)
+                        {
+                            cJSON *root = cJSON_Parse(local_response_buffer);
+
+                            if (root == NULL)
+                            {
+                                ESP_LOGE(TAG, "Failed to parse JSON");
+                                return;
+                            }
+
+                            cJSON *iterator = NULL;
+
+                            cJSON *dataJSON = cJSON_GetObjectItemCaseSensitive(root, "data");
+                            cJSON *homeAppliancesJSON = cJSON_GetObjectItemCaseSensitive(dataJSON, "homeappliances");
+
+                            cJSON_ArrayForEach(iterator, homeAppliancesJSON)
+                            {
+                                cJSON *haIdJSON = cJSON_GetObjectItemCaseSensitive(iterator, "haId");
+                                ESP_LOGI(TAG, "haId: %s", haIdJSON->valuestring);
+
+                                cJSON *typeJSON = cJSON_GetObjectItemCaseSensitive(iterator, "type");
+                                ESP_LOGI(TAG, "type: %s", typeJSON->valuestring);
+                            }
+                        }
+                    }
+
+                    // vTaskDelete(NULL)
                 }
-
-                const cJSON *accessTokenJSON = cJSON_GetObjectItemCaseSensitive(root, "access_token");
-                ESP_LOGI(TAG, "access_token: %s", accessTokenJSON->valuestring);
-
-                const cJSON *refreshTokenJSON = cJSON_GetObjectItemCaseSensitive(root, "refresh_token");
-                ESP_LOGI(TAG, "refresh_token: %s", refreshTokenJSON->valuestring);
-
-                // Save these somewhere.
-                //
-                // Stop the task.
-            }
-            else
-            {
-                ESP_LOGE(TAG, "HTTP GET request failed: %s", esp_err_to_name(err));
+                else
+                {
+                    ESP_LOGE(TAG, "HTTP GET request failed: %s", esp_err_to_name(err));
+                }
             }
 
             vTaskDelay(10000 / portTICK_PERIOD_MS);
         }
-    }
-    else
-    {
-        ESP_LOGE(TAG, "HTTP GET request failed: %s", esp_err_to_name(err));
     }
 }
 
