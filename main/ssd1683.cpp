@@ -66,6 +66,19 @@ void lcd_init(spi_device_handle_t spi)
     lcd_write_cmd(spi, 0x3C); // BorderWavefrom
     lcd_write_data(spi, 0x05);
 
+    // 1.5s refresh
+    // lcd_write_cmd(spi, 0x1A); // Write to temperature register
+    // lcd_write_data(spi, 0x6E);
+
+    // 1s refresh
+    lcd_write_cmd(spi, 0x1A); // Write to temperature register
+    lcd_write_data(spi, 0x5A);
+
+    lcd_write_cmd(spi, 0x22); // Load temperature value
+    lcd_write_data(spi, 0x91);
+    lcd_write_cmd(spi, 0x20);
+    lcd_read_busy();
+
     lcd_write_cmd(spi, 0x11);  // data  entry  mode
     lcd_write_data(spi, 0x03); // X-mode
 
