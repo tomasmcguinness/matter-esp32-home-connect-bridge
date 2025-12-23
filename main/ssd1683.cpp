@@ -2,10 +2,12 @@
 #include <string.h>
 #include <inttypes.h>
 #include <stdint.h>
-
+#include <esp_log.h>
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "ssd1683.h"
+
+static const char *TAG = "ssd1683";
 
 void lcd_read_busy()
 {
@@ -106,7 +108,8 @@ void lcd_init(spi_device_handle_t spi)
 void lcd_update(spi_device_handle_t spi)
 {
     lcd_write_cmd(spi, 0x22);
-    lcd_write_data(spi, 0xF7);
+    lcd_write_data(spi, 0xF7); // SLOW
+    //lcd_write_data(spi, 0xC7); // FAST
     lcd_write_cmd(spi, 0x20);
     lcd_read_busy();
 }
@@ -134,6 +137,8 @@ void lcd_clear(spi_device_handle_t spi)
 
 void lcd_draw(spi_device_handle_t spi, std::vector<uint8_t> buffer)
 {
+    ESP_LOGI(TAG, "lcd_draw");
+    
     uint16_t i;
 
     lcd_write_cmd(spi, 0x24);

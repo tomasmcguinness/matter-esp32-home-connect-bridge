@@ -59,12 +59,10 @@ using namespace chip::app::Clusters::OperationalState;
 #define MAX_HTTP_RECV_BUFFER 512
 #define MAX_HTTP_OUTPUT_BUFFER 30000
 
-esp_err_t app_bridge_create_bridged_device(node_t *node, uint16_t parent_endpoint_id, uint32_t matter_device_type_id);
-
-uint16_t aggregator_endpoint_id = chip::kInvalidEndpointId;
-
 spi_device_handle_t spi;
 std::vector<uint8_t> buffer = {};
+
+// static void start_bridge(void *param);
 
 void esp_qrcode_print_display(esp_qrcode_handle_t qrcode)
 {
@@ -212,9 +210,37 @@ esp_err_t _http_event_handler(esp_http_client_event_t *evt)
     return ESP_OK;
 }
 
-static void start_device_flow(void *param)
+void create_dishwasher_device()
 {
-    ESP_LOGI(TAG, "Starting device flow!");
+    ESP_LOGE(TAG, "Creating Dishwasher device");
+
+    node_t *node = node::get();
+    static OperationalStateDelegate operational_state_delegate;
+
+    dish_washer::config_t dish_washer_config;
+    dish_washer_config.operational_state.delegate = &operational_state_delegate; // Set to nullptr if not using a delegate
+
+    endpoint_t *endpoint = dish_washer::create(node, &dish_washer_config, ENDPOINT_FLAG_NONE, NULL);
+    ABORT_APP_ON_FAILURE(endpoint != nullptr, ESP_LOGE(TAG, "Failed to create dishwasher endpoint"));
+}
+
+// static void poll_status()
+// {
+//     // char *ha_id = (char *)malloc(required_size);
+//     // nvs_get_str(nvs_handle, "ha_id", ha_id, &required_size);
+
+//     while (1)
+//     {
+//         ESP_LOGI(TAG, "Checking status...");
+//         vTaskDelay(10000 / portTICK_PERIOD_MS);
+
+//         // Check token is still valid & refresh if necessary
+//     }
+// }
+
+esp_err_t perform_device_flow_authentication()
+{
+    ESP_LOGI(TAG, "Starting device flow authentication!");
 
     char *local_response_buffer = (char *)malloc(MAX_HTTP_OUTPUT_BUFFER + 1);
 
@@ -245,7 +271,7 @@ static void start_device_flow(void *param)
         if (root == NULL)
         {
             ESP_LOGE(TAG, "Failed to parse JSON");
-            return;
+            return ESP_FAIL;
         }
 
         const cJSON *deviceCodeJSON = cJSON_GetObjectItemCaseSensitive(root, "device_code");
@@ -254,12 +280,11 @@ static void start_device_flow(void *param)
         const cJSON *userCodeJSON = cJSON_GetObjectItemCaseSensitive(root, "user_code");
         ESP_LOGI(TAG, "user_code: %s", userCodeJSON->valuestring);
 
-        const cJSON *verificationUriJSON = cJSON_GetObjectItemCaseSensitive(root, "verification_uri");
-        ESP_LOGI(TAG, "verification_uri: %s", verificationUriJSON->valuestring);
-
         const cJSON *completeVerificationUriJSON = cJSON_GetObjectItemCaseSensitive(root, "verification_uri_complete");
         ESP_LOGI(TAG, "verification_uri_complete: %s", completeVerificationUriJSON->valuestring);
 
+        // Show the QR code to the user to scan.
+        //
         esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
         cfg.display_func = esp_qrcode_print_display;
 
@@ -272,9 +297,11 @@ static void start_device_flow(void *param)
         char post_data[200];
         snprintf(post_data, sizeof(post_data), "grant_type=device_code&device_code=%s&client_id=EAEC454A48CC2D7B95D43D5776F6049114E286CFA1D16E3D494AC67CF418F3E6", deviceCodeJSON->valuestring);
 
-        ESP_LOGI(TAG, "Code: %s", post_data);
-
         esp_http_client_set_post_field(client, post_data, strlen(post_data));
+
+        // TODO Wait one minute to complete authentication?
+        //
+        int count = 0;
 
         while (1)
         {
@@ -295,7 +322,7 @@ static void start_device_flow(void *param)
                     if (root == NULL)
                     {
                         ESP_LOGE(TAG, "Failed to parse JSON");
-                        return;
+                        return ESP_FAIL;
                     }
 
                     const cJSON *accessTokenJSON = cJSON_GetObjectItemCaseSensitive(root, "access_token");
@@ -318,7 +345,9 @@ static void start_device_flow(void *param)
                     }
                     nvs_close(nvs_handle);
 
-                    vTaskDelete(NULL);
+                    esp_restart();
+
+                    return err;
                 }
                 else
                 {
@@ -326,128 +355,134 @@ static void start_device_flow(void *param)
                 }
             }
 
+            count++;
+
+            if (count > 6)
+            {
+                vTaskDelete(NULL);
+                return ESP_FAIL;
+            }
+
             vTaskDelay(10000 / portTICK_PERIOD_MS);
         }
     }
-}
-
-static char *access_token;
-
-static void start_bridge(void *param)
-{
-    ESP_LOGI(TAG, "Starting Bridge!");
-
-    char *local_response_buffer = (char *)malloc(MAX_HTTP_OUTPUT_BUFFER + 1);
-
-    esp_http_client_config_t config = {
-        .url = "https://api.home-connect.com/api/homeappliances",
-        .method = HTTP_METHOD_GET,
-        .event_handler = _http_event_handler,
-        .buffer_size_tx = 2048,
-        .user_data = local_response_buffer,
-        .crt_bundle_attach = esp_crt_bundle_attach,
-    };
-    esp_http_client_handle_t client = esp_http_client_init(&config);
-
-    ESP_LOGI(TAG, "Setting authorization header...");
-
-    char auth_header[1400];
-    snprintf(auth_header, sizeof(auth_header), "Bearer %s", access_token);
-
-    esp_http_client_set_header(client, "Authorization", auth_header);
-
-    ESP_LOGI(TAG, "Making request...");
-    esp_err_t err = esp_http_client_perform(client);
-
-    if (err == ESP_OK)
+    else
     {
-        ESP_LOGI(TAG, "HTTP POST Status = %d, content_length = %" PRId64,
-                 esp_http_client_get_status_code(client),
-                 esp_http_client_get_content_length(client));
-
-        cJSON *root = cJSON_Parse(local_response_buffer);
-
-        if (root == NULL)
-        {
-            ESP_LOGE(TAG, "Failed to parse JSON");
-
-            const char *error_ptr = cJSON_GetErrorPtr();
-            if (error_ptr != NULL)
-            {
-                ESP_LOGE(TAG, "Error before: %s", error_ptr);
-            }
-        }
-        else
-        {
-            if (esp_http_client_get_status_code(client) == 200)
-            {
-                cJSON *root = cJSON_Parse(local_response_buffer);
-
-                if (root == NULL)
-                {
-                    ESP_LOGE(TAG, "Failed to parse JSON");
-                    return;
-                }
-
-                cJSON *iterator = NULL;
-
-                cJSON *dataJSON = cJSON_GetObjectItemCaseSensitive(root, "data");
-                cJSON *homeAppliancesJSON = cJSON_GetObjectItemCaseSensitive(dataJSON, "homeappliances");
-
-                cJSON_ArrayForEach(iterator, homeAppliancesJSON)
-                {
-                    cJSON *haIdJSON = cJSON_GetObjectItemCaseSensitive(iterator, "haId");
-                    ESP_LOGI(TAG, "haId: %s", haIdJSON->valuestring);
-
-                    cJSON *typeJSON = cJSON_GetObjectItemCaseSensitive(iterator, "type");
-                    ESP_LOGI(TAG, "type: %s", typeJSON->valuestring);
-                }
-
-                node_t *node = node::get();
-
-                app_bridge_create_bridged_device(node, aggregator_endpoint_id, ESP_MATTER_DISH_WASHER_DEVICE_TYPE_ID);
-            }
-        }
-    }
-
-    while (1)
-    {
-        ESP_LOGI(TAG, "Checking status...");
-        vTaskDelay(10000 / portTICK_PERIOD_MS);
+        return err;
     }
 }
 
-void init_bridge()
-{
-    // Check if we have a connection.
-    //
-    nvs_handle_t nvs_handle;
-    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
+// static void start_bridge(void *param)
+// {
+//     ESP_LOGI(TAG, "Starting Bridge!");
 
-    if (err == ESP_OK)
-    {
-        size_t required_size;
-        err = nvs_get_str(nvs_handle, "access_token", NULL, &required_size);
+//     nvs_handle_t nvs_handle;
+//     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
 
-        if (err == ESP_ERR_NVS_NOT_FOUND)
-        {
-            // Start the OAuth flow.
-            //
-            xTaskCreate(start_device_flow, "StartDeviceFlow", 5 * 1024, NULL, 5, NULL);
-        }
-        else
-        {
-            access_token = (char *)malloc(required_size);
-            nvs_get_str(nvs_handle, "access_token", access_token, &required_size);
+//     size_t required_size;
+//     err = nvs_get_str(nvs_handle, "ha_id", NULL, &required_size);
 
-            ESP_LOGI(TAG, "Loaded access token!");
-            ESP_LOGI(TAG, "%s", access_token);
+//     if (err == ESP_ERR_NVS_NOT_FOUND)
+//     {
+//         err = nvs_get_str(nvs_handle, "access_token", NULL, &required_size);
 
-            xTaskCreate(start_bridge, "StartBridge", 5 * 1024, NULL, 5, NULL);
-        }
-    }
-    nvs_close(nvs_handle);
-}
+//         if (err == ESP_ERR_NVS_NOT_FOUND)
+//         {
+//             ESP_LOGE(TAG, "No access token is present. ABORT!");
+//             nvs_close(nvs_handle);
+//             return;
+//         }
+
+//         char *access_token = (char *)malloc(required_size);
+//         nvs_get_str(nvs_handle, "access_token", access_token, &required_size);
+
+//         nvs_close(nvs_handle);
+
+//         esp_http_client_config_t config = {
+//             .url = "https://api.home-connect.com/api/homeappliances",
+//             .method = HTTP_METHOD_GET,
+//             .event_handler = _http_event_handler,
+//             .buffer_size_tx = 2048,
+//             .user_data = local_response_buffer,
+//             .crt_bundle_attach = esp_crt_bundle_attach,
+//         };
+//         esp_http_client_handle_t client = esp_http_client_init(&config);
+
+//         ESP_LOGI(TAG, "Setting authorization header...");
+
+//         char auth_header[1400];
+//         snprintf(auth_header, sizeof(auth_header), "Bearer %s", access_token);
+
+//         esp_http_client_set_header(client, "Authorization", auth_header);
+
+//         ESP_LOGI(TAG, "Making request...");
+//         esp_err_t err = esp_http_client_perform(client);
+
+//         if (err == ESP_OK)
+//         {
+//             ESP_LOGI(TAG, "HTTP POST Status = %d, content_length = %" PRId64,
+//                      esp_http_client_get_status_code(client),
+//                      esp_http_client_get_content_length(client));
+
+//             cJSON *root = cJSON_Parse(local_response_buffer);
+
+//             if (root == NULL)
+//             {
+//                 ESP_LOGE(TAG, "Failed to parse JSON");
+
+//                 const char *error_ptr = cJSON_GetErrorPtr();
+//                 if (error_ptr != NULL)
+//                 {
+//                     ESP_LOGE(TAG, "Error before: %s", error_ptr);
+//                 }
+//             }
+//             else
+//             {
+//                 if (esp_http_client_get_status_code(client) == 200)
+//                 {
+//                     cJSON *root = cJSON_Parse(local_response_buffer);
+
+//                     if (root == NULL)
+//                     {
+//                         ESP_LOGE(TAG, "Failed to parse JSON");
+//                         return;
+//                     }
+
+//                     cJSON *iterator = NULL;
+
+//                     cJSON *dataJSON = cJSON_GetObjectItemCaseSensitive(root, "data");
+//                     cJSON *homeAppliancesJSON = cJSON_GetObjectItemCaseSensitive(dataJSON, "homeappliances");
+
+//                     cJSON_ArrayForEach(iterator, homeAppliancesJSON)
+//                     {
+//                         cJSON *haIdJSON = cJSON_GetObjectItemCaseSensitive(iterator, "haId");
+//                         ESP_LOGI(TAG, "haId: %s", haIdJSON->valuestring);
+
+//                         cJSON *typeJSON = cJSON_GetObjectItemCaseSensitive(iterator, "type");
+//                         ESP_LOGI(TAG, "type: %s", typeJSON->valuestring);
+
+//                         err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
+//                         if (err == ESP_OK)
+//                         {
+//                             nvs_set_str(nvs_handle, "ha_id", haIdJSON->valuestring);
+//                             nvs_commit(nvs_handle);
+//                         }
+//                         nvs_close(nvs_handle);
+
+//                         create_dishwasher_device();
+//                         poll_status();
+//                     }
+//                 }
+//             }
+//         }
+//     }
+//     else
+//     {
+//         nvs_close(nvs_handle);
+//         create_dishwasher_device();
+//         poll_status();
+//     }
+// }
 
 static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
 {
@@ -459,7 +494,13 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
         if (event->Platform.ESPSystemEvent.Base == IP_EVENT &&
             event->Platform.ESPSystemEvent.Id == IP_EVENT_STA_GOT_IP)
         {
-            init_bridge();
+            nvs_handle_t nvs_handle;
+            esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
+            if (err == ESP_OK && nvs_find_key(nvs_handle, "access_token", NULL) != ESP_OK)
+            {
+                perform_device_flow_authentication();
+            }
+            nvs_close(nvs_handle);
         }
         break;
     case chip::DeviceLayer::DeviceEventType::kCommissioningComplete:
@@ -483,6 +524,10 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
             if (GetQRCode(qrCode, payload) == CHIP_NO_ERROR)
             {
                 esp_qrcode_generate(&cfg, qrCode.data());
+            }
+            else
+            {
+                ESP_LOGE(TAG, "Failed to generate the commissioning QR code");
             }
         }
 
@@ -510,53 +555,6 @@ void lcd_spi_pre_transfer_callback(spi_transaction_t *t)
 {
     int dc = (int)t->user;
     gpio_set_level((gpio_num_t)PIN_NUM_DC, dc);
-}
-
-esp_err_t create_bridge_devices(esp_matter::endpoint_t *ep, uint32_t device_type_id, void *priv_data)
-{
-    esp_err_t err = ESP_OK;
-
-    ESP_LOGE(TAG, "CREATING BRIDGED DEVICE: %lu", device_type_id);
-
-    switch (device_type_id)
-    {
-    case ESP_MATTER_DISH_WASHER_DEVICE_TYPE_ID:
-    {
-        //static OperationalStateDelegate operational_state_delegate;
-
-        dish_washer::config_t dish_washer_config;
-        //dish_washer_config.operational_state.delegate = &operational_state_delegate;
-
-        err = dish_washer::add(ep, &dish_washer_config);
-        break;
-    }
-    }
-
-    return err;
-}
-
-esp_err_t app_bridge_create_bridged_device(node_t *node,
-                                           uint16_t parent_endpoint_id,
-                                           uint32_t matter_device_type_id)
-{
-    device_t *new_device = esp_matter_bridge::create_device(node, parent_endpoint_id, matter_device_type_id, NULL);
-
-    esp_matter::endpoint::enable(new_device->endpoint);
-
-    return ESP_OK;
-}
-
-esp_err_t app_bridge_initialize(node_t *node, esp_matter_bridge::bridge_device_type_callback_t device_type_cb)
-{
-    esp_err_t err = esp_matter_bridge::initialize(node, device_type_cb);
-
-    if (err != ESP_OK)
-    {
-        ESP_LOGE(TAG, "Failed to initialize the esp_matter_bridge");
-        return err;
-    }
-
-    return ESP_OK;
 }
 
 extern "C" void app_main(void)
@@ -626,21 +624,21 @@ extern "C" void app_main(void)
     lcd_clear(spi);
 
     node::config_t node_config;
-
     node_t *node = node::create(&node_config, app_attribute_update_cb, app_identification_cb);
     ABORT_APP_ON_FAILURE(node != nullptr, ESP_LOGE(TAG, "Failed to create Matter node"));
 
-    aggregator::config_t aggregator_config;
-    endpoint_t *aggregator = endpoint::aggregator::create(node, &aggregator_config, ENDPOINT_FLAG_NONE, NULL);
-    ABORT_APP_ON_FAILURE(aggregator != nullptr, ESP_LOGE(TAG, "Failed to create aggregator endpoint"));
-
-    aggregator_endpoint_id = endpoint::get_id(aggregator);
+    // If we have an access token...
+    //
+    nvs_handle_t nvs_handle;
+    err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
+    if (nvs_find_key(nvs_handle, "access_token", NULL) == ESP_OK)
+    {
+        create_dishwasher_device();
+    }
+    nvs_close(nvs_handle);
 
     err = esp_matter::start(app_event_cb);
     ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to start Matter, err:%d", err));
-
-    err = app_bridge_initialize(node, create_bridge_devices);
-    ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to resume the bridged endpoints: %d", err));
 
     ESP_LOGI(TAG, "All done!");
 }
