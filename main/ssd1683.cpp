@@ -9,6 +9,8 @@
 
 static const char *TAG = "ssd1683";
 
+static std::vector<uint8_t> buffer = {};
+
 void lcd_read_busy()
 {
     while (1)
@@ -56,6 +58,17 @@ void lcd_reset()
 
 void lcd_init(spi_device_handle_t spi)
 {
+    uint16_t w = IMAGE_W / 8;
+    uint16_t h = IMAGE_H;
+
+    for (int j = 0; j < h; j++)
+    {
+        for (int i = 0; i < w; i++)
+        {
+            buffer.push_back(0xFF); // White
+        }
+    }
+
     lcd_reset();
     lcd_read_busy();
     lcd_write_cmd(spi, 0x12);
@@ -108,8 +121,8 @@ void lcd_init(spi_device_handle_t spi)
 void lcd_update(spi_device_handle_t spi)
 {
     lcd_write_cmd(spi, 0x22);
-    lcd_write_data(spi, 0xF7); // SLOW
-    //lcd_write_data(spi, 0xC7); // FAST
+    // lcd_write_data(spi, 0xF7); // SLOW
+    lcd_write_data(spi, 0xC7); // FAST
     lcd_write_cmd(spi, 0x20);
     lcd_read_busy();
 }
@@ -135,10 +148,10 @@ void lcd_clear(spi_device_handle_t spi)
     lcd_update(spi);
 }
 
-void lcd_draw(spi_device_handle_t spi, std::vector<uint8_t> buffer)
+void lcd_draw(spi_device_handle_t spi)
 {
     ESP_LOGI(TAG, "lcd_draw");
-    
+
     uint16_t i;
 
     lcd_write_cmd(spi, 0x24);
@@ -149,4 +162,124 @@ void lcd_draw(spi_device_handle_t spi, std::vector<uint8_t> buffer)
     }
 
     lcd_update(spi);
+}
+
+void lcd_set_pixel(uint16_t x, uint16_t y, bool black)
+{
+    uint16_t addr = x / 8 + y * (IMAGE_W / 8);
+    uint8_t current = buffer[addr];
+
+    if (black) // Set the bit to 1
+    {
+        buffer[addr] = current & ~(0x80 >> (x % 8));
+    }
+    else
+    {
+        buffer[addr] = current | (0x80 >> (x % 8));
+    }
+}
+
+void lcd_show_char(spi_device_handle_t spi, uint16_t x, uint16_t y, uint16_t chr, uint16_t size)
+{
+    uint16_t i, m, temp, size2, chr1;
+    uint16_t x0, y0;
+    x += 1, y += 1, x0 = x, y0 = y;
+    if (size == 8)
+    {
+        size2 = 6;
+    }
+    else
+    {
+        size2 = (size / 8 + ((size % 8) ? 1 : 0)) * (size / 2);
+    }
+    chr1 = chr - ' ';
+    for (i = 0; i < size2; i++)
+    {
+        if (size == 8)
+        {
+            temp = ascii_0806[chr1][i]; // 调用0806字体
+        }
+        // else if (size1 == 12)
+        // {
+        //   temp = ascii_1206[chr1][i]; //调用1206字体
+        // }
+        // else if (size1 == 16)
+        // {
+        //   temp = ascii_1608[chr1][i]; //调用1608字体
+        // }
+        // else if (size1 == 24)
+        // {
+        //   temp = ascii_2412[chr1][i]; //调用2412字体
+        // }
+        // else if (size1 == 48)
+        // {
+        //   temp = ascii_4824[chr1][i]; //调用2412字体
+        // }
+        else
+        {
+            return;
+        }
+
+        for (m = 0; m < 8; m++)
+        {
+            if (temp & 0x01)
+            {
+                lcd_set_pixel(x, y, true);
+            }
+            else
+            {
+                lcd_set_pixel(x, y, false);
+            }
+            temp >>= 1;
+            y++;
+        }
+
+        x++;
+        if ((size != 8) && ((x - x0) == size / 2))
+        {
+            x = x0;
+            y0 = y0 + 8;
+        }
+        y = y0;
+    }
+}
+
+void lcd_show_string(spi_device_handle_t spi, uint16_t x, uint16_t y, uint16_t size, char *text)
+{
+    while (*text != '\0') // 判断是不是非法字符!
+    {
+        lcd_show_char(spi, x, y, *text, size);
+        text++;
+        x += size / 2;
+    }
+}
+
+void lcd_draw_string(spi_device_handle_t spi, uint16_t x, uint16_t y, uint16_t size, char *text)
+{
+    int length = strlen(text);
+    int i = 0;
+    char line[33 + 1]; //+1 is to place the string terminator '\0'
+
+    while (i < length)
+    {
+        int lineLength = 0;
+        memset(line, 0, sizeof(line)); // Clear the line buffer
+
+        // Fill the line until it reaches the screen width or the end of the string
+        while (lineLength < 33 && i < length)
+        {
+            line[lineLength++] = text[i++];
+        }
+
+        lcd_show_string(spi, x, y, size, line); // Display this line
+        y += size;                              // Update the y-coordinate for displaying the next line
+
+        // If there are still remaining strings and the next line exceeds the screen height, stop displaying
+        // You need to decide when to stop displaying based on your screen height here
+        // For example, if your screen height is 300 pixels and the height of each character is 24 pixels, then you can display 12 lines
+        if (y >= 300)
+        {
+            break;
+        }
+    }
 }
