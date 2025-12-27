@@ -197,24 +197,24 @@ void lcd_show_char(spi_device_handle_t spi, uint16_t x, uint16_t y, uint16_t chr
     {
         if (size == 8)
         {
-            temp = ascii_0806[chr1][i]; // 调用0806字体
+            temp = ascii_0806[chr1][i];
         }
         // else if (size1 == 12)
         // {
         //   temp = ascii_1206[chr1][i]; //调用1206字体
         // }
-        // else if (size1 == 16)
-        // {
-        //   temp = ascii_1608[chr1][i]; //调用1608字体
-        // }
-        // else if (size1 == 24)
-        // {
-        //   temp = ascii_2412[chr1][i]; //调用2412字体
-        // }
-        // else if (size1 == 48)
-        // {
-        //   temp = ascii_4824[chr1][i]; //调用2412字体
-        // }
+        else if (size == 16)
+        {
+            temp = ascii_1608[chr1][i];
+        }
+        else if (size == 24)
+        {
+            temp = ascii_2412[chr1][i];
+        }
+        else if (size == 48)
+        {
+            temp = ascii_4824[chr1][i];
+        }
         else
         {
             return;
@@ -246,7 +246,7 @@ void lcd_show_char(spi_device_handle_t spi, uint16_t x, uint16_t y, uint16_t chr
 
 void lcd_show_string(spi_device_handle_t spi, uint16_t x, uint16_t y, uint16_t size, char *text)
 {
-    while (*text != '\0') // 判断是不是非法字符!
+    while (*text != '\0')
     {
         lcd_show_char(spi, x, y, *text, size);
         text++;
@@ -256,9 +256,13 @@ void lcd_show_string(spi_device_handle_t spi, uint16_t x, uint16_t y, uint16_t s
 
 void lcd_draw_string(spi_device_handle_t spi, uint16_t x, uint16_t y, uint16_t size, char *text)
 {
+    ESP_LOGI(TAG, "Drawing \"%s\"", text);
+
+    int max_characters = 50;
+
     int length = strlen(text);
     int i = 0;
-    char line[33 + 1]; //+1 is to place the string terminator '\0'
+    char line[max_characters + 1]; //+1 is to place the string terminator '\0'
 
     while (i < length)
     {
@@ -266,7 +270,7 @@ void lcd_draw_string(spi_device_handle_t spi, uint16_t x, uint16_t y, uint16_t s
         memset(line, 0, sizeof(line)); // Clear the line buffer
 
         // Fill the line until it reaches the screen width or the end of the string
-        while (lineLength < 33 && i < length)
+        while (lineLength < max_characters && i < length)
         {
             line[lineLength++] = text[i++];
         }

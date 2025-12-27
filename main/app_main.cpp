@@ -41,6 +41,7 @@
 #include <format>
 
 #include "dishwasher.h"
+#include "program_manager.h"
 
 static const char *TAG = "app";
 
@@ -59,7 +60,14 @@ using namespace chip::app::Clusters::OperationalState;
 #define MAX_HTTP_RECV_BUFFER 512
 #define MAX_HTTP_OUTPUT_BUFFER 5000
 
+static EventGroupHandle_t s_wifi_event_group;
+
+#define WIFI_CONNECTED_BIT BIT0
+#define WIFI_FAIL_BIT BIT1
+
 spi_device_handle_t spi;
+
+program_manager_t g_program_manager = {0};
 
 void esp_qrcode_print_display(esp_qrcode_handle_t qrcode)
 {
@@ -249,6 +257,7 @@ esp_err_t fetch_programs(esp_http_client_handle_t client, char *haId)
     char url[256];
     snprintf(url, sizeof(url), "https://api.home-connect.com/api/homeappliances/%s/programs/available", haId);
     esp_http_client_set_url(client, url);
+    esp_http_client_set_method(client, HTTP_METHOD_GET);
 
     ESP_LOGI(TAG, "Fetching programs...");
     esp_err_t err = esp_http_client_perform(client);
@@ -288,8 +297,12 @@ esp_err_t fetch_programs(esp_http_client_handle_t client, char *haId)
                 ESP_LOGI(TAG, "key: %s", keyJSON->valuestring);
 
                 cJSON *nameJSON = cJSON_GetObjectItemCaseSensitive(iterator, "name");
-                ESP_LOGI(TAG, "type: %s", nameJSON->valuestring);
+                ESP_LOGI(TAG, "name: %s", nameJSON->valuestring);
+
+                add_program(&g_program_manager, keyJSON->valuestring, nameJSON->valuestring);
             }
+
+            save_programs_to_nvs(&g_program_manager);
         }
     }
 
@@ -298,8 +311,6 @@ esp_err_t fetch_programs(esp_http_client_handle_t client, char *haId)
 
 void run_loop(void *pvParameters)
 {
-    // Have we authenticated?
-    //
     nvs_handle_t nvs_handle;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
     if (err != ESP_OK)
@@ -322,140 +333,42 @@ void run_loop(void *pvParameters)
     };
     esp_http_client_handle_t client = esp_http_client_init(&config);
     esp_http_client_set_header(client, "Accept-Language", "en-gb");
-    
-    while (1)
+
+    ESP_LOGI(TAG, "Waiting for a connection to the network...");
+
+    EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT, pdFALSE, pdFALSE, portMAX_DELAY);
+
+    if (bits & WIFI_CONNECTED_BIT)
     {
-        if (nvs_find_key(nvs_handle, "access_token", NULL) != ESP_OK)
+        ESP_LOGI(TAG, "Connected to a network!");
+
+        while (1)
         {
-            ESP_LOGI(TAG, "Performing HomeConnect authentication...");
-
-            // We have no access token, so we need to authenticate.
+            // Have we authenticated?
             //
-            esp_http_client_set_header(client, "Content-Type", "application/x-www-form-urlencoded");
-
-            const char *post_data = "client_id=EAEC454A48CC2D7B95D43D5776F6049114E286CFA1D16E3D494AC67CF418F3E6";
-            esp_http_client_set_post_field(client, post_data, strlen(post_data));
-
-            esp_err_t err = esp_http_client_perform(client);
-
-            if (err != ESP_OK)
+            if (nvs_find_key(nvs_handle, "access_token", NULL) != ESP_OK)
             {
-                ESP_LOGE(TAG, "Failed to perform authentication POST");
-                return;
-            }
+                ESP_LOGI(TAG, "Performing HomeConnect authentication...");
 
-            ESP_LOGI(TAG, "HTTP POST Status = %d, content_length = %" PRId64,
-                     esp_http_client_get_status_code(client),
-                     esp_http_client_get_content_length(client));
+                // We have no access token, so we need to authenticate.
+                //
+                esp_http_client_set_header(client, "Content-Type", "application/x-www-form-urlencoded");
 
-            cJSON *root = cJSON_Parse(local_response_buffer);
-
-            if (root == NULL)
-            {
-                ESP_LOGE(TAG, "Failed to parse JSON");
-                return;
-            }
-
-            const cJSON *deviceCodeJSON = cJSON_GetObjectItemCaseSensitive(root, "device_code");
-            ESP_LOGI(TAG, "device_code: %s", deviceCodeJSON->valuestring);
-
-            const cJSON *userCodeJSON = cJSON_GetObjectItemCaseSensitive(root, "user_code");
-            ESP_LOGI(TAG, "user_code: %s", userCodeJSON->valuestring);
-
-            const cJSON *completeVerificationUriJSON = cJSON_GetObjectItemCaseSensitive(root, "verification_uri_complete");
-            ESP_LOGI(TAG, "verification_uri_complete: %s", completeVerificationUriJSON->valuestring);
-
-            // Show the QR code to the user to scan.
-            //
-            esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
-            cfg.display_func = esp_qrcode_print_display;
-
-            esp_qrcode_generate(&cfg, completeVerificationUriJSON->valuestring);
-
-            // We now need to wait for the user to authorize.
-            //
-            int count = 0;
-
-            ESP_LOGI(TAG, "Waiting for user to Authorize the device...");
-
-            while (1)
-            {
-                ESP_LOGI(TAG, "Checking for token....");
-
-                esp_http_client_set_url(client, "https://api.home-connect.com/security/oauth/token");
-
-                char post_data[200];
-                snprintf(post_data, sizeof(post_data), "grant_type=device_code&device_code=%s&client_id=EAEC454A48CC2D7B95D43D5776F6049114E286CFA1D16E3D494AC67CF418F3E6", deviceCodeJSON->valuestring);
-
+                const char *post_data = "client_id=EAEC454A48CC2D7B95D43D5776F6049114E286CFA1D16E3D494AC67CF418F3E6";
                 esp_http_client_set_post_field(client, post_data, strlen(post_data));
 
                 esp_err_t err = esp_http_client_perform(client);
 
-                if (err == ESP_OK)
+                if (err != ESP_OK)
                 {
-                    ESP_LOGI(TAG, "HTTP POST Status = %d, content_length = %" PRId64,
-                             esp_http_client_get_status_code(client),
-                             esp_http_client_get_content_length(client));
-
-                    if (esp_http_client_get_status_code(client) == 200)
-                    {
-                        cJSON *root = cJSON_Parse(local_response_buffer);
-
-                        if (root == NULL)
-                        {
-                            ESP_LOGE(TAG, "Failed to parse JSON");
-                            return;
-                        }
-
-                        const cJSON *accessTokenJSON = cJSON_GetObjectItemCaseSensitive(root, "access_token");
-                        ESP_LOGI(TAG, "access_token: %s", accessTokenJSON->valuestring);
-
-                        const cJSON *refreshTokenJSON = cJSON_GetObjectItemCaseSensitive(root, "refresh_token");
-                        ESP_LOGI(TAG, "refresh_token: %s", refreshTokenJSON->valuestring);
-
-                        ESP_LOGI(TAG, "Saving tokens...");
-
-                        nvs_set_str(nvs_handle, "access_token", accessTokenJSON->valuestring);
-                        nvs_set_str(nvs_handle, "refresh_token", refreshTokenJSON->valuestring);
-                        nvs_commit(nvs_handle);
-
-                        // Jump to the outer while loop.
-                        break;
-                    }
+                    ESP_LOGE(TAG, "Failed to perform authentication POST");
+                    return;
                 }
-                else
-                {
-                        vTaskDelay(10000 / portTICK_PERIOD_MS);
-                }
-            }
-        }
-        else if (nvs_find_key(nvs_handle, "ha_id", NULL) != ESP_OK)
-        {
-            // We have not fetched the appliances yet.
-            //
-            ESP_LOGI(TAG, "Fetching HomeConnect appliances...");
 
-            esp_http_client_set_url(client, "https://api.home-connect.com/api/homeappliances");
-            esp_http_client_set_method(client, HTTP_METHOD_GET);
-            esp_http_client_set_timeout_ms(client, 5000);
+                ESP_LOGI(TAG, "HTTP POST Status = %d, content_length = %" PRId64,
+                         esp_http_client_get_status_code(client),
+                         esp_http_client_get_content_length(client));
 
-            set_access_token(nvs_handle, client);
-
-            ESP_LOGI(TAG, "Fetching appliances...");
-            err = esp_http_client_perform(client);
-
-            if (err != ESP_OK)
-            {
-                ESP_LOGE(TAG, "Failed to fetch appliances");
-                return;
-            }
-
-            ESP_LOGI(TAG, "HTTP GET Status = %d, content_length = %" PRId64,
-                     esp_http_client_get_status_code(client),
-                     esp_http_client_get_content_length(client));
-
-            if (esp_http_client_get_status_code(client) == 200)
-            {
                 cJSON *root = cJSON_Parse(local_response_buffer);
 
                 if (root == NULL)
@@ -463,166 +376,45 @@ void run_loop(void *pvParameters)
                     ESP_LOGE(TAG, "Failed to parse JSON");
                     return;
                 }
-                else
+
+                const cJSON *deviceCodeJSON = cJSON_GetObjectItemCaseSensitive(root, "device_code");
+                ESP_LOGI(TAG, "device_code: %s", deviceCodeJSON->valuestring);
+
+                const cJSON *userCodeJSON = cJSON_GetObjectItemCaseSensitive(root, "user_code");
+                ESP_LOGI(TAG, "user_code: %s", userCodeJSON->valuestring);
+
+                const cJSON *completeVerificationUriJSON = cJSON_GetObjectItemCaseSensitive(root, "verification_uri_complete");
+                ESP_LOGI(TAG, "verification_uri_complete: %s", completeVerificationUriJSON->valuestring);
+
+                // Show the QR code to the user to scan.
+                //
+                esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
+                cfg.display_func = esp_qrcode_print_display;
+
+                esp_qrcode_generate(&cfg, completeVerificationUriJSON->valuestring);
+
+                // We now need to wait for the user to authorize.
+                //
+                int count = 0;
+
+                ESP_LOGI(TAG, "Waiting for user to Authorize the device...");
+
+                while (1)
                 {
-                    cJSON *iterator = NULL;
+                    ESP_LOGI(TAG, "Checking for token....");
 
-                    cJSON *dataJSON = cJSON_GetObjectItemCaseSensitive(root, "data");
-                    cJSON *homeAppliancesJSON = cJSON_GetObjectItemCaseSensitive(dataJSON, "homeappliances");
+                    esp_http_client_set_url(client, "https://api.home-connect.com/security/oauth/token");
 
-                    cJSON_ArrayForEach(iterator, homeAppliancesJSON)
-                    {
-                        cJSON *haIdJSON = cJSON_GetObjectItemCaseSensitive(iterator, "haId");
-                        ESP_LOGI(TAG, "haId: %s", haIdJSON->valuestring);
+                    char post_data[200];
+                    snprintf(post_data, sizeof(post_data), "grant_type=device_code&device_code=%s&client_id=EAEC454A48CC2D7B95D43D5776F6049114E286CFA1D16E3D494AC67CF418F3E6", deviceCodeJSON->valuestring);
 
-                        cJSON *typeJSON = cJSON_GetObjectItemCaseSensitive(iterator, "type");
-                        ESP_LOGI(TAG, "type: %s", typeJSON->valuestring);
+                    esp_http_client_set_post_field(client, post_data, strlen(post_data));
 
-                        // Fetch the available programs
-                        //
-                        err = fetch_programs(client, haIdJSON->valuestring);
-
-                        if (err != ESP_OK)
-                        {
-                            ESP_LOGE(TAG, "Failed to fetch programs.");
-                            return;
-                        }
-
-                        nvs_set_str(nvs_handle, "ha_id", haIdJSON->valuestring);
-                        nvs_commit(nvs_handle);
-                    }
-                }
-            }
-        }
-        else
-        {
-            ESP_LOGI(TAG, "Loop...");
-            vTaskDelay(10000 / portTICK_PERIOD_MS);
-        }
-    }
-}
-
-/*
-void perform_device_flow_authentication(intptr_t arg)
-{
-    ESP_LOGI(TAG, "Starting device flow authentication!");
-
-    char *local_response_buffer = (char *)malloc(MAX_HTTP_OUTPUT_BUFFER + 1);
-
-    esp_http_client_config_t config = {
-        .url = "https://api.home-connect.com/security/oauth/device_authorization",
-        .method = HTTP_METHOD_POST,
-        .event_handler = _http_event_handler,
-        .user_data = local_response_buffer,
-        .crt_bundle_attach = esp_crt_bundle_attach,
-    };
-    esp_http_client_handle_t client = esp_http_client_init(&config);
-
-    esp_http_client_set_header(client, "Content-Type", "application/x-www-form-urlencoded");
-
-    const char *post_data = "client_id=EAEC454A48CC2D7B95D43D5776F6049114E286CFA1D16E3D494AC67CF418F3E6";
-    esp_http_client_set_post_field(client, post_data, strlen(post_data));
-
-    esp_err_t err = esp_http_client_perform(client);
-
-    if (err == ESP_OK)
-    {
-        ESP_LOGI(TAG, "HTTP POST Status = %d, content_length = %" PRId64,
-                 esp_http_client_get_status_code(client),
-                 esp_http_client_get_content_length(client));
-
-        cJSON *root = cJSON_Parse(local_response_buffer);
-
-        if (root == NULL)
-        {
-            ESP_LOGE(TAG, "Failed to parse JSON");
-            return;
-        }
-
-        const cJSON *deviceCodeJSON = cJSON_GetObjectItemCaseSensitive(root, "device_code");
-        ESP_LOGI(TAG, "device_code: %s", deviceCodeJSON->valuestring);
-
-        const cJSON *userCodeJSON = cJSON_GetObjectItemCaseSensitive(root, "user_code");
-        ESP_LOGI(TAG, "user_code: %s", userCodeJSON->valuestring);
-
-        const cJSON *completeVerificationUriJSON = cJSON_GetObjectItemCaseSensitive(root, "verification_uri_complete");
-        ESP_LOGI(TAG, "verification_uri_complete: %s", completeVerificationUriJSON->valuestring);
-
-        // Show the QR code to the user to scan.
-        //
-        esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
-        cfg.display_func = esp_qrcode_print_display;
-
-        esp_qrcode_generate(&cfg, completeVerificationUriJSON->valuestring);
-
-        // We now need to wait for the user to authorize.
-        //
-        int count = 0;
-
-        while (1)
-        {
-            ESP_LOGI(TAG, "Checking for token...");
-
-            esp_http_client_set_url(client, "https://api.home-connect.com/security/oauth/token");
-
-            char post_data[200];
-            snprintf(post_data, sizeof(post_data), "grant_type=device_code&device_code=%s&client_id=EAEC454A48CC2D7B95D43D5776F6049114E286CFA1D16E3D494AC67CF418F3E6", deviceCodeJSON->valuestring);
-
-            esp_http_client_set_post_field(client, post_data, strlen(post_data));
-
-            esp_err_t err = esp_http_client_perform(client);
-
-            if (err == ESP_OK)
-            {
-                ESP_LOGI(TAG, "HTTP POST Status = %d, content_length = %" PRId64,
-                         esp_http_client_get_status_code(client),
-                         esp_http_client_get_content_length(client));
-
-                if (esp_http_client_get_status_code(client) == 200)
-                {
-                    cJSON *root = cJSON_Parse(local_response_buffer);
-
-                    if (root == NULL)
-                    {
-                        ESP_LOGE(TAG, "Failed to parse JSON");
-                        return;
-                    }
-
-                    const cJSON *accessTokenJSON = cJSON_GetObjectItemCaseSensitive(root, "access_token");
-                    ESP_LOGI(TAG, "access_token: %s", accessTokenJSON->valuestring);
-
-                    const cJSON *refreshTokenJSON = cJSON_GetObjectItemCaseSensitive(root, "refresh_token");
-                    ESP_LOGI(TAG, "refresh_token: %s", refreshTokenJSON->valuestring);
-
-                    nvs_handle_t nvs_handle;
-                    esp_err_t err;
-
-                    ESP_LOGI(TAG, "Saving tokens...");
-
-                    err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
-                    if (err == ESP_OK)
-                    {
-                        nvs_set_str(nvs_handle, "access_token", accessTokenJSON->valuestring);
-                        nvs_set_str(nvs_handle, "refresh_token", refreshTokenJSON->valuestring);
-                        nvs_commit(nvs_handle);
-                    }
-                    else
-                    {
-                        return;
-                    }
-                    nvs_close(nvs_handle);
-
-                    esp_http_client_set_url(client, "https://api.home-connect.com/api/homeappliances");
-                    esp_http_client_set_method(client, HTTP_METHOD_GET);
-
-                    set_access_token(client);
-
-                    ESP_LOGI(TAG, "Fetching appliances...");
-                    err = esp_http_client_perform(client);
+                    esp_err_t err = esp_http_client_perform(client);
 
                     if (err == ESP_OK)
                     {
-                        ESP_LOGI(TAG, "HTTP GET Status = %d, content_length = %" PRId64,
+                        ESP_LOGI(TAG, "HTTP POST Status = %d, content_length = %" PRId64,
                                  esp_http_client_get_status_code(client),
                                  esp_http_client_get_content_length(client));
 
@@ -635,78 +427,100 @@ void perform_device_flow_authentication(intptr_t arg)
                                 ESP_LOGE(TAG, "Failed to parse JSON");
                                 return;
                             }
-                            else
-                            {
-                                cJSON *iterator = NULL;
 
-                                cJSON *dataJSON = cJSON_GetObjectItemCaseSensitive(root, "data");
-                                cJSON *homeAppliancesJSON = cJSON_GetObjectItemCaseSensitive(dataJSON, "homeappliances");
+                            const cJSON *accessTokenJSON = cJSON_GetObjectItemCaseSensitive(root, "access_token");
+                            ESP_LOGI(TAG, "access_token: %s", accessTokenJSON->valuestring);
 
-                                cJSON_ArrayForEach(iterator, homeAppliancesJSON)
-                                {
-                                    cJSON *haIdJSON = cJSON_GetObjectItemCaseSensitive(iterator, "haId");
-                                    ESP_LOGI(TAG, "haId: %s", haIdJSON->valuestring);
+                            const cJSON *refreshTokenJSON = cJSON_GetObjectItemCaseSensitive(root, "refresh_token");
+                            ESP_LOGI(TAG, "refresh_token: %s", refreshTokenJSON->valuestring);
 
-                                    cJSON *typeJSON = cJSON_GetObjectItemCaseSensitive(iterator, "type");
-                                    ESP_LOGI(TAG, "type: %s", typeJSON->valuestring);
+                            ESP_LOGI(TAG, "Saving tokens...");
 
-                                    err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
-                                    if (err == ESP_OK)
-                                    {
-                                        nvs_set_str(nvs_handle, "ha_id", haIdJSON->valuestring);
-                                        nvs_commit(nvs_handle);
-                                    }
-                                    nvs_close(nvs_handle);
+                            nvs_set_str(nvs_handle, "access_token", accessTokenJSON->valuestring);
+                            nvs_set_str(nvs_handle, "refresh_token", refreshTokenJSON->valuestring);
+                            nvs_commit(nvs_handle);
 
-                                    // TODO Only handle dishwashers!
-                                    //
-
-                                    // Fetch the available programs
-                                    //
-                                    fetch_programs(client, haIdJSON->valuestring);
-
-                                    return;
-                                }
-                            }
-                        }
-                        else
-                        {
-                            ESP_LOGE(TAG, "HTTP GET request failed: %s", esp_err_to_name(err));
-                            return;
+                            // Jump to the outer while loop.
+                            break;
                         }
                     }
-                    else
-                    {
-                        ESP_LOGE(TAG, "HTTP GET request failed: %s", esp_err_to_name(err));
-                        return;
-                    }
+
+                    vTaskDelay(10000 / portTICK_PERIOD_MS);
                 }
-
-                // Token wasn't fetched. Give it another go.
+            }
+            else if (nvs_find_key(nvs_handle, "ha_id", NULL) != ESP_OK)
+            {
+                // We have not fetched the appliances yet.
                 //
-                count++;
+                ESP_LOGI(TAG, "Fetching HomeConnect appliances...");
 
-                if (count > 6)
+                esp_http_client_set_url(client, "https://api.home-connect.com/api/homeappliances");
+                esp_http_client_set_method(client, HTTP_METHOD_GET);
+                esp_http_client_set_timeout_ms(client, 5000);
+
+                set_access_token(nvs_handle, client);
+
+                ESP_LOGI(TAG, "Fetching appliances...");
+                err = esp_http_client_perform(client);
+
+                if (err != ESP_OK)
                 {
-                    vTaskDelete(NULL);
+                    ESP_LOGE(TAG, "Failed to fetch appliances");
                     return;
                 }
 
-                vTaskDelay(10000 / portTICK_PERIOD_MS);
+                ESP_LOGI(TAG, "HTTP GET Status = %d, content_length = %" PRId64,
+                         esp_http_client_get_status_code(client),
+                         esp_http_client_get_content_length(client));
+
+                if (esp_http_client_get_status_code(client) == 200)
+                {
+                    cJSON *root = cJSON_Parse(local_response_buffer);
+
+                    if (root == NULL)
+                    {
+                        ESP_LOGE(TAG, "Failed to parse JSON");
+                        return;
+                    }
+                    else
+                    {
+                        cJSON *iterator = NULL;
+
+                        cJSON *dataJSON = cJSON_GetObjectItemCaseSensitive(root, "data");
+                        cJSON *homeAppliancesJSON = cJSON_GetObjectItemCaseSensitive(dataJSON, "homeappliances");
+
+                        cJSON_ArrayForEach(iterator, homeAppliancesJSON)
+                        {
+                            cJSON *haIdJSON = cJSON_GetObjectItemCaseSensitive(iterator, "haId");
+                            ESP_LOGI(TAG, "haId: %s", haIdJSON->valuestring);
+
+                            cJSON *typeJSON = cJSON_GetObjectItemCaseSensitive(iterator, "type");
+                            ESP_LOGI(TAG, "type: %s", typeJSON->valuestring);
+
+                            // Fetch the available programs
+                            //
+                            err = fetch_programs(client, haIdJSON->valuestring);
+
+                            if (err != ESP_OK)
+                            {
+                                ESP_LOGE(TAG, "Failed to fetch programs.");
+                                return;
+                            }
+
+                            nvs_set_str(nvs_handle, "ha_id", haIdJSON->valuestring);
+                            nvs_commit(nvs_handle);
+                        }
+                    }
+                }
             }
             else
             {
-                ESP_LOGE(TAG, "Token request failed. Closing connection and waiting...");
-                esp_http_client_close(client);
-
+                ESP_LOGI(TAG, "Loop...");
                 vTaskDelay(10000 / portTICK_PERIOD_MS);
             }
         }
     }
-
-    return;
 }
-*/
 
 static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
 {
@@ -718,21 +532,30 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
         if (event->Platform.ESPSystemEvent.Base == IP_EVENT &&
             event->Platform.ESPSystemEvent.Id == IP_EVENT_STA_GOT_IP)
         {
-            TaskHandle_t xHandle = NULL;
+            // char *local_response_buffer = (char *)malloc(MAX_HTTP_OUTPUT_BUFFER + 1);
 
-            /* Create the task, storing the handle. */
-            xTaskCreate(
-                run_loop,         /* Function that implements the task. */
-                "NAME",           /* Text name for the task. */
-                5 * 1024,         /* Stack size in words, not bytes. */
-                NULL,             /* Parameter passed into the task. */
-                tskIDLE_PRIORITY, /* Priority at which the task is created. */
-                &xHandle);
+            // esp_http_client_config_t config = {
+            //     .url = "https://api.home-connect.com/security/oauth/device_authorization",
+            //     .method = HTTP_METHOD_POST,
+            //     .event_handler = _http_event_handler,
+            //     .buffer_size_tx = 2048,
+            //     .user_data = local_response_buffer,
+            //     .crt_bundle_attach = esp_crt_bundle_attach,
+            // };
+            // esp_http_client_handle_t client = esp_http_client_init(&config);
+            // esp_http_client_set_header(client, "Accept-Language", "en-gb");
+
+            // nvs_handle_t nvs_handle;
+            // esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
+
+            // set_access_token(nvs_handle, client);
+
+            // fetch_programs(client, "012050425733000093");
         }
         break;
     case chip::DeviceLayer::DeviceEventType::kCommissioningComplete:
         ESP_LOGI(TAG, "Commissioning complete");
-        lcd_clear(spi);
+        //lcd_clear(spi);
         break;
     case chip::DeviceLayer::DeviceEventType::kCommissioningWindowOpened:
         ESP_LOGI(TAG, "Commissioning window opened");
@@ -786,6 +609,8 @@ void lcd_spi_pre_transfer_callback(spi_transaction_t *t)
 
 extern "C" void app_main(void)
 {
+    s_wifi_event_group = xEventGroupCreate();
+
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND)
     {
@@ -796,6 +621,8 @@ extern "C" void app_main(void)
         /* Retry nvs_flash_init */
         ESP_ERROR_CHECK(nvs_flash_init());
     }
+
+    program_manager_init(&g_program_manager);
 
     ESP_LOGI(TAG, "Setting up SPI...");
 
@@ -838,14 +665,33 @@ extern "C" void app_main(void)
 
     lcd_clear(spi);
 
-    lcd_draw_string(spi, 10, 150, 8, "Merry Christmas, ya filthy animals");
+    uint16_t y = 24;
+
+    lcd_draw_string(spi, 10, y, 48, "Choose Program");
+
+    program_t *current = g_program_manager.program_list;
+
+    int row = 0;
+
+    while (current != NULL)
+    {
+        if(row++ == 0) {
+            lcd_draw_string(spi, 10, y, 24, ">");
+        }
+        lcd_draw_string(spi, 34, y, 24, current->name);
+        y+=12;
+
+        current = current->next;
+    }
+
+    lcd_draw(spi);
 
     node::config_t node_config;
     node_t *node = node::create(&node_config, app_attribute_update_cb, app_identification_cb);
     ABORT_APP_ON_FAILURE(node != nullptr, ESP_LOGE(TAG, "Failed to create Matter node"));
 
-    // If we have an dishwasher, be sure to create the endpoint, since it's dynamic
-    //
+    // // If we have an dishwasher, be sure to create the endpoint, since it's dynamic
+    // //
     // nvs_handle_t nvs_handle;
     // err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
     // if (err == ESP_OK && nvs_find_key(nvs_handle, "ha_id", NULL) == ESP_OK)
@@ -854,8 +700,19 @@ extern "C" void app_main(void)
     // }
     // nvs_close(nvs_handle);
 
-    err = esp_matter::start(app_event_cb);
-    ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to start Matter, err:%d", err));
+    //err = esp_matter::start(app_event_cb);
+    //ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to start Matter, err:%d", err));
+
+    TaskHandle_t xHandle = NULL;
+
+    /* Create the task, storing the handle. */
+    xTaskCreate(
+        run_loop,         /* Function that implements the task. */
+        "NAME",           /* Text name for the task. */
+        5 * 1024,         /* Stack size in words, not bytes. */
+        NULL,             /* Parameter passed into the task. */
+        tskIDLE_PRIORITY, /* Priority at which the task is created. */
+        &xHandle);
 
     ESP_LOGI(TAG, "All done!");
 }
