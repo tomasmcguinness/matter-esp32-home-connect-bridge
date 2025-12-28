@@ -56,6 +56,7 @@ using namespace esp_matter::attribute;
 using namespace esp_matter::endpoint;
 using namespace esp_matter::cluster;
 using namespace chip::app::Clusters::OperationalState;
+using namespace chip::app::Clusters::DishwasherMode;
 
 #define MAX_HTTP_RECV_BUFFER 512
 #define MAX_HTTP_OUTPUT_BUFFER 5000
@@ -199,7 +200,9 @@ esp_err_t _http_event_handler(esp_http_client_event_t *evt)
     return ESP_OK;
 }
 
-void create_dishwasher_device()
+endpoint_t *dishwasher_endpoint;
+
+void create_basic_dishwasher()
 {
     ESP_LOGE(TAG, "Creating Dishwasher device");
 
@@ -207,19 +210,46 @@ void create_dishwasher_device()
     static OperationalStateDelegate operational_state_delegate;
 
     dish_washer::config_t dish_washer_config;
-    dish_washer_config.operational_state.delegate = &operational_state_delegate; // Set to nullptr if not using a delegate
+    dish_washer_config.operational_state.delegate = &operational_state_delegate;
 
-    endpoint_t *endpoint = dish_washer::create(node, &dish_washer_config, ENDPOINT_FLAG_NONE, NULL);
-    ABORT_APP_ON_FAILURE(endpoint != nullptr, ESP_LOGE(TAG, "Failed to create dishwasher endpoint"));
+    dishwasher_endpoint = dish_washer::create(node, &dish_washer_config, ENDPOINT_FLAG_NONE, NULL);
+    ABORT_APP_ON_FAILURE(dishwasher_endpoint != nullptr, ESP_LOGE(TAG, "Failed to create dishwasher endpoint"));
 
-    esp_matter::cluster_t *operational_state_cluster = esp_matter::cluster::get(endpoint, chip::app::Clusters::OperationalState::Id);
+    uint16_t dishwasher_endpoint_id = endpoint::get_id(dishwasher_endpoint);
+    ESP_LOGI(TAG, "Dishwasher created with endpoint_id %d", dishwasher_endpoint_id);
+}
 
-    esp_matter::cluster::operational_state::attribute::create_countdown_time(operational_state_cluster, 0);
+void add_features_to_dishwasher()
+{
+    uint16_t dishwasher_endpoint_id = endpoint::get_id(dishwasher_endpoint);
+    ESP_LOGI(TAG, "Add features to dishwasher with endpoint_id %d", dishwasher_endpoint_id);
+
+    // Add commands to the dishwasher's operational state cluster.
+    //
+    esp_matter::cluster_t *operational_state_cluster = esp_matter::cluster::get(dishwasher_endpoint, chip::app::Clusters::OperationalState::Id);
 
     esp_matter::cluster::operational_state::command::create_start(operational_state_cluster);
     esp_matter::cluster::operational_state::command::create_stop(operational_state_cluster);
     esp_matter::cluster::operational_state::command::create_pause(operational_state_cluster);
     esp_matter::cluster::operational_state::command::create_resume(operational_state_cluster);
+
+    // Add the CountdownTime attribute
+    //
+    esp_matter::cluster::operational_state::attribute::create_countdown_time(operational_state_cluster, 0);
+
+    // Add the dishwasher mode
+    //
+    static DishwasherModeDelegate dishwasher_mode_delegate;
+
+    esp_matter::cluster::dish_washer_mode::config_t dish_washer_mode_config;
+    dish_washer_mode_config.delegate = &dishwasher_mode_delegate;
+    dish_washer_mode_config.current_mode = ModeNormal;
+
+    esp_matter::cluster_t *dishwasher_mode_cluster = esp_matter::cluster::dish_washer_mode::create(dishwasher_endpoint, &dish_washer_mode_config, CLUSTER_FLAG_SERVER);
+
+    esp_matter::cluster::mode_base::attribute::create_supported_modes(dishwasher_mode_cluster, NULL, 0, 0);
+
+    esp_matter::cluster::mode_base::command::create_change_to_mode(dishwasher_mode_cluster);
 }
 
 esp_err_t set_access_token(nvs_handle_t nvs_handle, esp_http_client_handle_t client)
@@ -532,6 +562,10 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
         if (event->Platform.ESPSystemEvent.Base == IP_EVENT &&
             event->Platform.ESPSystemEvent.Id == IP_EVENT_STA_GOT_IP)
         {
+            // We have connected to the network!
+            //
+            xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+
             // char *local_response_buffer = (char *)malloc(MAX_HTTP_OUTPUT_BUFFER + 1);
 
             // esp_http_client_config_t config = {
@@ -555,7 +589,7 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
         break;
     case chip::DeviceLayer::DeviceEventType::kCommissioningComplete:
         ESP_LOGI(TAG, "Commissioning complete");
-        //lcd_clear(spi);
+        // lcd_clear(spi);
         break;
     case chip::DeviceLayer::DeviceEventType::kCommissioningWindowOpened:
         ESP_LOGI(TAG, "Commissioning window opened");
@@ -665,7 +699,7 @@ extern "C" void app_main(void)
 
     lcd_clear(spi);
 
-    lcd_draw_string(spi, 10, 10, 48, "Choose Program");
+    lcd_draw_string(spi, 10, 5, 48, "Choose Program");
 
     program_t *current = g_program_manager.program_list;
 
@@ -675,11 +709,12 @@ extern "C" void app_main(void)
 
     while (current != NULL)
     {
-        if(row++ == 0) {
+        if (row++ == 0)
+        {
             lcd_draw_string(spi, 10, y, 24, ">");
         }
         lcd_draw_string(spi, 34, y, 24, current->name);
-        y+=24;
+        y += 24;
 
         current = current->next;
     }
@@ -690,18 +725,20 @@ extern "C" void app_main(void)
     node_t *node = node::create(&node_config, app_attribute_update_cb, app_identification_cb);
     ABORT_APP_ON_FAILURE(node != nullptr, ESP_LOGE(TAG, "Failed to create Matter node"));
 
-    // // If we have an dishwasher, be sure to create the endpoint, since it's dynamic
-    // //
-    // nvs_handle_t nvs_handle;
-    // err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
-    // if (err == ESP_OK && nvs_find_key(nvs_handle, "ha_id", NULL) == ESP_OK)
-    // {
-    //     create_dishwasher_device();
-    // }
-    // nvs_close(nvs_handle);
+    create_basic_dishwasher();
 
-    //err = esp_matter::start(app_event_cb);
-    //ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to start Matter, err:%d", err));
+    // If we have an dishwasher, be sure to create the endpoint, since it's dynamic
+    //
+    nvs_handle_t nvs_handle;
+    err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
+    if (err == ESP_OK && nvs_find_key(nvs_handle, "ha_id", NULL) == ESP_OK)
+    {
+        add_features_to_dishwasher();
+    }
+    nvs_close(nvs_handle);
+
+    err = esp_matter::start(app_event_cb);
+    ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to start Matter, err:%d", err));
 
     TaskHandle_t xHandle = NULL;
 

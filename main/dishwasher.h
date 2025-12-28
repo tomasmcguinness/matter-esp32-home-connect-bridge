@@ -12,6 +12,8 @@ using namespace chip::app;
 using namespace chip::app::Clusters;
 using namespace chip::app::Clusters::ModeBase;
 using namespace chip::app::Clusters::OperationalState;
+using namespace chip::app::Clusters::DishwasherMode;
+using namespace chip::Protocols::InteractionModel;
 
 namespace chip
 {
@@ -58,6 +60,55 @@ namespace chip
                 void Shutdown();
 
             } // namespace OperationalState
+        } // namespace Clusters
+    } // namespace app
+} // namespace chip
+
+namespace chip
+{
+    namespace app
+    {
+        namespace Clusters
+        {
+            namespace DishwasherMode
+            {
+                const uint8_t ModeNormal = 0;
+
+                class DishwasherModeDelegate : public ModeBase::Delegate
+                {
+                private:
+                    using ModeTagStructType = detail::Structs::ModeTagStruct::Type;
+                    ModeTagStructType modeTagsNormal[1] = {{.value = to_underlying(ModeTag::kNormal)}};
+
+                    const detail::Structs::ModeOptionStruct::Type kModeOptions[1] = {
+                        detail::Structs::ModeOptionStruct::Type{.label = CharSpan::fromCharString("Eco 50°"),
+                                                                .mode = ModeNormal,
+                                                                .modeTags = DataModel::List<const ModeTagStructType>(modeTagsNormal)},
+                        };
+
+                    CHIP_ERROR Init() override;
+                    void HandleChangeToMode(uint8_t mode, ModeBase::Commands::ChangeToModeResponse::Type &response) override;
+
+                    CHIP_ERROR GetModeValueByIndex(uint8_t modeIndex, uint8_t &value) override;
+                    CHIP_ERROR GetModeTagsByIndex(uint8_t modeIndex, DataModel::List<ModeTagStructType> &tags) override;
+
+                public:
+                    ~DishwasherModeDelegate() override = default;
+
+                    CHIP_ERROR GetModeLabelByIndex(uint8_t modeIndex, MutableCharSpan &label) override;
+
+                    void PostAttributeChangeCallback(AttributeId attributeId, uint8_t type, uint16_t size, uint8_t *value);
+
+                    Protocols::InteractionModel::Status SetDishwasherMode(uint8_t mode);
+                };
+
+                ModeBase::Instance *GetInstance();
+                ModeBase::Delegate *GetDelegate();
+
+                void Shutdown();
+
+            } // namespace DishwasherMode
+
         } // namespace Clusters
     } // namespace app
 } // namespace chip
