@@ -665,13 +665,13 @@ extern "C" void app_main(void)
 
     lcd_clear(spi);
 
-    uint16_t y = 24;
-
-    lcd_draw_string(spi, 10, y, 48, "Choose Program");
+    lcd_draw_string(spi, 10, 10, 48, "Choose Program");
 
     program_t *current = g_program_manager.program_list;
 
     int row = 0;
+
+    uint16_t y = 58;
 
     while (current != NULL)
     {
@@ -679,7 +679,7 @@ extern "C" void app_main(void)
             lcd_draw_string(spi, 10, y, 24, ">");
         }
         lcd_draw_string(spi, 34, y, 24, current->name);
-        y+=12;
+        y+=24;
 
         current = current->next;
     }

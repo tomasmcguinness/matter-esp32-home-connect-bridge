@@ -258,7 +258,7 @@ void lcd_draw_string(spi_device_handle_t spi, uint16_t x, uint16_t y, uint16_t s
 {
     ESP_LOGI(TAG, "Drawing \"%s\"", text);
 
-    int max_characters = 50;
+    int max_characters = 52;
 
     int length = strlen(text);
     int i = 0;
