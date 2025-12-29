@@ -839,43 +839,43 @@ extern "C" void app_main(void)
     node_t *node = node::create(&node_config, app_attribute_update_cb, app_identification_cb);
     ABORT_APP_ON_FAILURE(node != nullptr, ESP_LOGE(TAG, "Failed to create Matter node"));
 
-    static OperationalStateDelegate operational_state_delegate;
+    // static OperationalStateDelegate operational_state_delegate;
 
-    dish_washer::config_t dish_washer_config;
-    dish_washer_config.operational_state.delegate = &operational_state_delegate;
+    // dish_washer::config_t dish_washer_config;
+    // dish_washer_config.operational_state.delegate = &operational_state_delegate;
 
-    endpoint_t *ep = dish_washer::create(node, &dish_washer_config, ENDPOINT_FLAG_NONE, NULL);
+    // endpoint_t *ep = dish_washer::create(node, &dish_washer_config, ENDPOINT_FLAG_NONE, NULL);
 
-    esp_matter::cluster_t *operational_state_cluster = esp_matter::cluster::get(ep, chip::app::Clusters::OperationalState::Id);
+    // esp_matter::cluster_t *operational_state_cluster = esp_matter::cluster::get(ep, chip::app::Clusters::OperationalState::Id);
 
-    esp_matter::cluster::operational_state::attribute::create_countdown_time(operational_state_cluster, 0);
+    // esp_matter::cluster::operational_state::attribute::create_countdown_time(operational_state_cluster, 0);
 
-    esp_matter::cluster::operational_state::command::create_start(operational_state_cluster);
-    esp_matter::cluster::operational_state::command::create_stop(operational_state_cluster);
-    esp_matter::cluster::operational_state::command::create_pause(operational_state_cluster);
-    esp_matter::cluster::operational_state::command::create_resume(operational_state_cluster);
+    // esp_matter::cluster::operational_state::command::create_start(operational_state_cluster);
+    // esp_matter::cluster::operational_state::command::create_stop(operational_state_cluster);
+    // esp_matter::cluster::operational_state::command::create_pause(operational_state_cluster);
+    // esp_matter::cluster::operational_state::command::create_resume(operational_state_cluster);
 
-    static DishwasherModeDelegate dishwasher_mode_delegate;
+    // static DishwasherModeDelegate dishwasher_mode_delegate;
 
-    esp_matter::cluster::dish_washer_mode::config_t dish_washer_mode_config;
-    dish_washer_mode_config.delegate = &dishwasher_mode_delegate;
-    dish_washer_mode_config.current_mode = ModeNormal;
+    // esp_matter::cluster::dish_washer_mode::config_t dish_washer_mode_config;
+    // dish_washer_mode_config.delegate = &dishwasher_mode_delegate;
+    // dish_washer_mode_config.current_mode = ModeNormal;
 
-    esp_matter::cluster_t *dishwasher_mode_cluster = esp_matter::cluster::dish_washer_mode::create(ep, &dish_washer_mode_config, CLUSTER_FLAG_SERVER);
+    // esp_matter::cluster_t *dishwasher_mode_cluster = esp_matter::cluster::dish_washer_mode::create(ep, &dish_washer_mode_config, CLUSTER_FLAG_SERVER);
 
-    esp_matter::cluster::mode_base::attribute::create_supported_modes(dishwasher_mode_cluster, NULL, 0, 0);
+    // esp_matter::cluster::mode_base::attribute::create_supported_modes(dishwasher_mode_cluster, NULL, 0, 0);
 
-    esp_matter::cluster::mode_base::command::create_change_to_mode(dishwasher_mode_cluster);
+    // esp_matter::cluster::mode_base::command::create_change_to_mode(dishwasher_mode_cluster);
 
 
 
     
 
-    // aggregator::config_t aggregator_config;
-    // endpoint_t *aggregator = endpoint::aggregator::create(node, &aggregator_config, ENDPOINT_FLAG_NONE, NULL);
-    // ABORT_APP_ON_FAILURE(aggregator != nullptr, ESP_LOGE(TAG, "Failed to create aggregator endpoint"));
+    aggregator::config_t aggregator_config;
+    endpoint_t *aggregator = endpoint::aggregator::create(node, &aggregator_config, ENDPOINT_FLAG_NONE, NULL);
+    ABORT_APP_ON_FAILURE(aggregator != nullptr, ESP_LOGE(TAG, "Failed to create aggregator endpoint"));
 
-    // aggregator_endpoint_id = endpoint::get_id(aggregator);
+    aggregator_endpoint_id = endpoint::get_id(aggregator);
 
     // create_basic_dishwasher();
 
@@ -892,15 +892,15 @@ extern "C" void app_main(void)
     err = esp_matter::start(app_event_cb);
     ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to start Matter, err:%d", err));
 
-    // ESP_LOGI(TAG, "Initializing the bridge...");
+    ESP_LOGI(TAG, "Initializing the bridge...");
 
-    // err = app_bridge_initialize(node, create_bridge_devices);
-    // ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to resume the bridged endpoints: %d", err));
+    err = app_bridge_initialize(node, create_bridge_devices);
+    ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to resume the bridged endpoints: %d", err));
 
     //esp_matter_bridge::device_t *dishwasher = esp_matter_bridge::resume_device(node, 0x02, NULL);
     //esp_matter::endpoint::enable(dishwasher->endpoint);
 
-    // app_bridge_create_bridged_device(node::get(), aggregator_endpoint_id, ESP_MATTER_DISH_WASHER_DEVICE_TYPE_ID, NULL);
+    //app_bridge_create_bridged_device(node::get(), aggregator_endpoint_id, ESP_MATTER_DISH_WASHER_DEVICE_TYPE_ID, NULL);
 
     TaskHandle_t xHandle = NULL;
 

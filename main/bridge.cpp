@@ -16,6 +16,8 @@ esp_err_t app_bridge_create_bridged_device(node_t *node, uint16_t parent_endpoin
 
     esp_matter::endpoint::enable(new_dev->endpoint);
 
+    esp_matter::cluster::delegate_init_callback_common();
+
     return ESP_OK;
 }
 
@@ -49,6 +51,8 @@ esp_err_t app_bridge_initialize(node_t *node, esp_matter_bridge::bridge_device_t
             esp_matter::endpoint::enable(dev->endpoint);
         }
     }
+
+    esp_matter::cluster::delegate_init_callback_common();
 
     return err;
 }
