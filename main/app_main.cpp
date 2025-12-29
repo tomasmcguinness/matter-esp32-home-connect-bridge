@@ -577,6 +577,29 @@ void run_loop(void *pvParameters)
                             nvs_set_str(nvs_handle, "ha_id", haIdJSON->valuestring);
                             nvs_commit(nvs_handle);
 
+                            lcd_clear(spi);
+                            lcd_draw_string(spi, 10, 5, 48, "Choose Program");
+
+                            program_t *current = g_program_manager.program_list;
+
+                            int row = 0;
+
+                            uint16_t y = 58;
+
+                            while (current != NULL)
+                            {
+                                if (row++ == 0)
+                                {
+                                    lcd_draw_string(spi, 10, y, 24, ">");
+                                }
+                                lcd_draw_string(spi, 34, y, 24, current->name);
+                                y += 24;
+
+                                current = current->next;
+                            }
+
+                            lcd_draw(spi);
+
                             ESP_LOGI(TAG, "Creating bridged device...");
                             app_bridge_create_bridged_device(node::get(), aggregator_endpoint_id, ESP_MATTER_DISH_WASHER_DEVICE_TYPE_ID, NULL);
                         }
@@ -704,6 +727,7 @@ void lcd_spi_pre_transfer_callback(spi_transaction_t *t)
     gpio_set_level((gpio_num_t)PIN_NUM_DC, dc);
 }
 
+
 esp_err_t create_bridge_devices(esp_matter::endpoint_t *ep, uint32_t device_type_id, void *priv_data)
 {
     esp_err_t err = ESP_OK;
@@ -811,28 +835,6 @@ extern "C" void app_main(void)
 
     lcd_clear(spi);
 
-    // lcd_draw_string(spi, 10, 5, 48, "Choose Program");
-
-    // program_t *current = g_program_manager.program_list;
-
-    // int row = 0;
-
-    // uint16_t y = 58;
-
-    // while (current != NULL)
-    // {
-    //     if (row++ == 0)
-    //     {
-    //         lcd_draw_string(spi, 10, y, 24, ">");
-    //     }
-    //     lcd_draw_string(spi, 34, y, 24, current->name);
-    //     y += 24;
-
-    //     current = current->next;
-    // }
-
-    // lcd_draw(spi);
-
     node::config_t node_config;
     node_t *node = node::create(&node_config, app_attribute_update_cb, app_identification_cb);
     ABORT_APP_ON_FAILURE(node != nullptr, ESP_LOGE(TAG, "Failed to create Matter node"));
@@ -865,6 +867,10 @@ extern "C" void app_main(void)
 
     esp_matter::cluster::mode_base::command::create_change_to_mode(dishwasher_mode_cluster);
 
+
+
+    
+
     // aggregator::config_t aggregator_config;
     // endpoint_t *aggregator = endpoint::aggregator::create(node, &aggregator_config, ENDPOINT_FLAG_NONE, NULL);
     // ABORT_APP_ON_FAILURE(aggregator != nullptr, ESP_LOGE(TAG, "Failed to create aggregator endpoint"));
@@ -886,11 +892,13 @@ extern "C" void app_main(void)
     err = esp_matter::start(app_event_cb);
     ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to start Matter, err:%d", err));
 
+    // ESP_LOGI(TAG, "Initializing the bridge...");
+
     // err = app_bridge_initialize(node, create_bridge_devices);
     // ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to resume the bridged endpoints: %d", err));
 
-    // esp_matter_bridge::device_t *dishwasher = esp_matter_bridge::resume_device(node, 0x02, NULL);
-    // esp_matter::endpoint::enable(dishwasher->endpoint);
+    //esp_matter_bridge::device_t *dishwasher = esp_matter_bridge::resume_device(node, 0x02, NULL);
+    //esp_matter::endpoint::enable(dishwasher->endpoint);
 
     // app_bridge_create_bridged_device(node::get(), aggregator_endpoint_id, ESP_MATTER_DISH_WASHER_DEVICE_TYPE_ID, NULL);
 

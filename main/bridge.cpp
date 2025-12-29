@@ -28,5 +28,27 @@ esp_err_t app_bridge_initialize(node_t *node, esp_matter_bridge::bridge_device_t
         ESP_LOGE(TAG, "Failed to initialize the esp_matter_bridge");
     }
 
+    uint16_t matter_endpoint_id_array[MAX_BRIDGED_DEVICE_COUNT];
+
+    esp_matter_bridge::get_bridged_endpoint_ids(matter_endpoint_id_array);
+
+    for (size_t idx = 0; idx < MAX_BRIDGED_DEVICE_COUNT; ++idx)
+    {
+        if (matter_endpoint_id_array[idx] != chip::kInvalidEndpointId)
+        {
+            ESP_LOGI(TAG, "Resuming bridged device at endpoint ID: %u", matter_endpoint_id_array[idx]);
+
+            esp_matter_bridge::device_t *dev = esp_matter_bridge::resume_device(node, matter_endpoint_id_array[idx], NULL);
+
+            if (!dev)
+            {
+                ESP_LOGE(TAG, "Failed to resume the bridged device");
+                continue;
+            }
+
+            esp_matter::endpoint::enable(dev->endpoint);
+        }
+    }
+
     return err;
 }
