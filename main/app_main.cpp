@@ -211,84 +211,6 @@ esp_err_t _http_event_handler(esp_http_client_event_t *evt)
 
 endpoint_t *dishwasher_endpoint;
 
-void create_basic_dishwasher()
-{
-    ESP_LOGI(TAG, "Creating Dishwasher device...");
-
-    node_t *node = node::get();
-    static OperationalStateDelegate operational_state_delegate;
-
-    dish_washer::config_t dish_washer_config;
-    dish_washer_config.operational_state.delegate = &operational_state_delegate;
-
-    dishwasher_endpoint = dish_washer::create(node, &dish_washer_config, ENDPOINT_FLAG_NONE, NULL);
-    ABORT_APP_ON_FAILURE(dishwasher_endpoint != nullptr, ESP_LOGE(TAG, "Failed to create dishwasher endpoint"));
-
-    uint16_t dishwasher_endpoint_id = endpoint::get_id(dishwasher_endpoint);
-    ESP_LOGI(TAG, "Dishwasher created with endpoint_id %d", dishwasher_endpoint_id);
-}
-
-void add_features_to_dishwasher()
-{
-    uint16_t dishwasher_endpoint_id = endpoint::get_id(dishwasher_endpoint);
-    ESP_LOGI(TAG, "Add features to dishwasher with endpoint_id %d", dishwasher_endpoint_id);
-
-    // Add commands to the dishwasher's operational state cluster.
-    //
-    esp_matter::cluster_t *operational_state_cluster = esp_matter::cluster::get(dishwasher_endpoint, chip::app::Clusters::OperationalState::Id);
-
-    esp_matter::cluster::operational_state::command::create_start(operational_state_cluster);
-    esp_matter::cluster::operational_state::command::create_stop(operational_state_cluster);
-    esp_matter::cluster::operational_state::command::create_pause(operational_state_cluster);
-    esp_matter::cluster::operational_state::command::create_resume(operational_state_cluster);
-
-    // Add the CountdownTime attribute
-    //
-    esp_matter::cluster::operational_state::attribute::create_countdown_time(operational_state_cluster, 0);
-
-    // Add the dishwasher mode
-    //
-    static DishwasherModeDelegate dishwasher_mode_delegate;
-
-    esp_matter::cluster::dish_washer_mode::config_t dish_washer_mode_config;
-    dish_washer_mode_config.delegate = &dishwasher_mode_delegate;
-    dish_washer_mode_config.current_mode = ModeNormal;
-
-    esp_matter::cluster_t *dishwasher_mode_cluster = esp_matter::cluster::dish_washer_mode::create(dishwasher_endpoint, &dish_washer_mode_config, CLUSTER_FLAG_SERVER);
-
-    esp_matter::cluster::mode_base::attribute::create_supported_modes(dishwasher_mode_cluster, NULL, 0, 0);
-
-    esp_matter::cluster::mode_base::command::create_change_to_mode(dishwasher_mode_cluster);
-
-    node_t *node = node::get();
-    esp_matter::cluster_t *basic_information_cluster = esp_matter::cluster::get(endpoint::get(node, 0x0), chip::app::Clusters::BasicInformation::Id);
-
-    if (basic_information_cluster == NULL)
-    {
-        ESP_LOGE(TAG, "Basic Information cluster is not present");
-        return;
-    }
-
-    attribute_t *attribute = esp_matter::attribute::get(0x00, chip::app::Clusters::BasicInformation::Id, chip::app::Clusters::BasicInformation::Attributes::ConfigurationVersion::Id);
-
-    if (attribute == NULL)
-    {
-        ESP_LOGE(TAG, "ConfigurationVersion attribute is not present");
-        return;
-    }
-
-    esp_matter_attr_val_t val = esp_matter_invalid(NULL);
-    attribute::get_val(attribute, &val);
-
-    ESP_LOGI(TAG, "ConfigurationVersion attribute: %lu", val.val.u32);
-
-    val.val.u32++;
-
-    attribute::set_val(attribute, &val);
-
-    ESP_LOGI(TAG, "ConfigurationVersion attribute after: %lu", val.val.u32);
-}
-
 esp_err_t set_access_token(nvs_handle_t nvs_handle, esp_http_client_handle_t client)
 {
     size_t required_size;
@@ -720,13 +642,11 @@ static esp_err_t app_attribute_update_cb(attribute::callback_type_t type, uint16
     return err;
 }
 
-// set the D/C line to the value indicated in the user field.
 void lcd_spi_pre_transfer_callback(spi_transaction_t *t)
 {
     int dc = (int)t->user;
     gpio_set_level((gpio_num_t)PIN_NUM_DC, dc);
 }
-
 
 esp_err_t create_bridge_devices(esp_matter::endpoint_t *ep, uint32_t device_type_id, void *priv_data)
 {
@@ -839,55 +759,11 @@ extern "C" void app_main(void)
     node_t *node = node::create(&node_config, app_attribute_update_cb, app_identification_cb);
     ABORT_APP_ON_FAILURE(node != nullptr, ESP_LOGE(TAG, "Failed to create Matter node"));
 
-    // static OperationalStateDelegate operational_state_delegate;
-
-    // dish_washer::config_t dish_washer_config;
-    // dish_washer_config.operational_state.delegate = &operational_state_delegate;
-
-    // endpoint_t *ep = dish_washer::create(node, &dish_washer_config, ENDPOINT_FLAG_NONE, NULL);
-
-    // esp_matter::cluster_t *operational_state_cluster = esp_matter::cluster::get(ep, chip::app::Clusters::OperationalState::Id);
-
-    // esp_matter::cluster::operational_state::attribute::create_countdown_time(operational_state_cluster, 0);
-
-    // esp_matter::cluster::operational_state::command::create_start(operational_state_cluster);
-    // esp_matter::cluster::operational_state::command::create_stop(operational_state_cluster);
-    // esp_matter::cluster::operational_state::command::create_pause(operational_state_cluster);
-    // esp_matter::cluster::operational_state::command::create_resume(operational_state_cluster);
-
-    // static DishwasherModeDelegate dishwasher_mode_delegate;
-
-    // esp_matter::cluster::dish_washer_mode::config_t dish_washer_mode_config;
-    // dish_washer_mode_config.delegate = &dishwasher_mode_delegate;
-    // dish_washer_mode_config.current_mode = ModeNormal;
-
-    // esp_matter::cluster_t *dishwasher_mode_cluster = esp_matter::cluster::dish_washer_mode::create(ep, &dish_washer_mode_config, CLUSTER_FLAG_SERVER);
-
-    // esp_matter::cluster::mode_base::attribute::create_supported_modes(dishwasher_mode_cluster, NULL, 0, 0);
-
-    // esp_matter::cluster::mode_base::command::create_change_to_mode(dishwasher_mode_cluster);
-
-
-
-    
-
     aggregator::config_t aggregator_config;
     endpoint_t *aggregator = endpoint::aggregator::create(node, &aggregator_config, ENDPOINT_FLAG_NONE, NULL);
     ABORT_APP_ON_FAILURE(aggregator != nullptr, ESP_LOGE(TAG, "Failed to create aggregator endpoint"));
 
     aggregator_endpoint_id = endpoint::get_id(aggregator);
-
-    // create_basic_dishwasher();
-
-    // If we have an dishwasher, be sure to create the endpoint, since it's dynamic
-    //
-    // nvs_handle_t nvs_handle;
-    // err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
-    // if (err == ESP_OK && nvs_find_key(nvs_handle, "ha_id", NULL) == ESP_OK)
-    // {
-    //     add_features_to_dishwasher();
-    // }
-    // nvs_close(nvs_handle);
 
     err = esp_matter::start(app_event_cb);
     ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to start Matter, err:%d", err));
@@ -897,25 +773,15 @@ extern "C" void app_main(void)
     err = app_bridge_initialize(node, create_bridge_devices);
     ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to resume the bridged endpoints: %d", err));
 
-    //esp_matter_bridge::device_t *dishwasher = esp_matter_bridge::resume_device(node, 0x02, NULL);
-    //esp_matter::endpoint::enable(dishwasher->endpoint);
-
-    //app_bridge_create_bridged_device(node::get(), aggregator_endpoint_id, ESP_MATTER_DISH_WASHER_DEVICE_TYPE_ID, NULL);
-
     TaskHandle_t xHandle = NULL;
 
-    /* Create the task, storing the handle. */
     xTaskCreate(
-        run_loop,         /* Function that implements the task. */
-        "NAME",           /* Text name for the task. */
-        5 * 1024,         /* Stack size in words, not bytes. */
-        NULL,             /* Parameter passed into the task. */
-        tskIDLE_PRIORITY, /* Priority at which the task is created. */
+        run_loop,         
+        "NAME",           
+        5 * 1024,         
+        NULL,             
+        tskIDLE_PRIORITY, 
         &xHandle);
-
-    // esp_matter::console::bridge_register_commands();
-    // esp_matter::console::factoryreset_register_commands();
-    // esp_matter::console::init();
 
     ESP_LOGI(TAG, "All done!");
 }

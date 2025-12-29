@@ -113,27 +113,6 @@ OperationalState::OperationalStateDelegate *OperationalState::GetDelegate()
     return gOperationalStateDelegate;
 }
 
-// void emberAfOperationalStateClusterInitCallback(chip::EndpointId endpointId)
-// {
-//     ESP_LOGI(TAG, "emberAfOperationalStateClusterInitCallback()");
-
-//     // VerifyOrDie(endpointId == 1); // this cluster is only enabled for endpoint 1.
-//     VerifyOrDie(gOperationalStateInstance == nullptr && gOperationalStateDelegate == nullptr);
-
-//     gOperationalStateDelegate = new OperationalStateDelegate;
-//     EndpointId operationalStateEndpoint = 0x01;
-//     gOperationalStateInstance = new OperationalState::Instance(gOperationalStateDelegate, operationalStateEndpoint);
-
-//     gOperationalStateInstance->SetOperationalState(to_underlying(OperationalState::OperationalStateEnum::kStopped));
-//     gOperationalStateInstance->SetCurrentPhase(0);
-
-//     gOperationalStateInstance->Init();
-
-//     uint8_t value = to_underlying(OperationalStateEnum::kStopped);
-//     gOperationalStateDelegate->PostAttributeChangeCallback(chip::app::Clusters::OperationalState::Attributes::OperationalState::Id, ZCL_INT8U_ATTRIBUTE_TYPE, sizeof(uint8_t), &value);
-//     gOperationalStateDelegate->PostAttributeChangeCallback(chip::app::Clusters::OperationalState::Attributes::CurrentPhase::Id, ZCL_INT8U_ATTRIBUTE_TYPE, sizeof(uint8_t), 0);
-// }
-
 //****************************
 //* DISHWASHER MODE DELEGATE *
 //****************************
@@ -199,14 +178,8 @@ CHIP_ERROR DishwasherModeDelegate::GetModeTagsByIndex(uint8_t modeIndex, List<Mo
         return CHIP_ERROR_PROVIDER_LIST_EXHAUSTED;
     }
 
-    // if (tags.size() < kModeOptions[modeIndex].modeTags.size())
-    // {
-    //     return CHIP_ERROR_INVALID_ARGUMENT;
-    // }
-
-    // std::copy(kModeOptions[modeIndex].modeTags.begin(), kModeOptions[modeIndex].modeTags.end(), tags.begin());
-    // tags.reduce_size(kModeOptions[modeIndex].modeTags.size());
-
+    // Always return kNormal.
+    //
     detail::Structs::ModeTagStruct::Type modeTagsNormal[1] = {{.value = to_underlying(ModeTag::kNormal)}};
 
     DataModel::List<const detail::Structs::ModeTagStruct::Type> modeTags = DataModel::List<const detail::Structs::ModeTagStruct::Type>(modeTagsNormal);
@@ -216,31 +189,6 @@ CHIP_ERROR DishwasherModeDelegate::GetModeTagsByIndex(uint8_t modeIndex, List<Mo
 
         return CHIP_NO_ERROR;
 }
-
-// Status DishwasherModeDelegate::SetDishwasherMode(uint8_t modeValue)
-// {
-//     ESP_LOGI(TAG, "DishwasherModeDelegate::SetDishwasherMode");
-
-//     // We can only update the DishwasherMode when it's not running.
-//     //
-
-//     VerifyOrReturnError(DishwasherMode::GetInstance() != nullptr, Status::InvalidInState);
-
-//     if (!DishwasherMode::GetInstance()->IsSupportedMode(modeValue))
-//     {
-//         ChipLogError(AppServer, "SetDishwasherMode bad mode");
-//         return Status::ConstraintError;
-//     }
-
-//     Status status = DishwasherMode::GetInstance()->UpdateCurrentMode(modeValue);
-//     if (status != Status::Success)
-//     {
-//         ChipLogError(AppServer, "SetDishwasherMode updateMode failed 0x%02x", to_underlying(status));
-//         return status;
-//     }
-
-//     return chip::Protocols::InteractionModel::Status::Success;
-// }
 
 ModeBase::Instance *DishwasherMode::GetInstance()
 {
@@ -264,27 +212,4 @@ void DishwasherMode::Shutdown()
         delete gDishwasherModeDelegate;
         gDishwasherModeDelegate = nullptr;
     }
-}
-
-void emberAfDishwasherModeClusterInitCallback(chip::EndpointId endpointId)
-{
-    ESP_LOGI(TAG, "DishwasherModeDelegate::emberAfDishwasherModeClusterInitCallback");
-
-    // VerifyOrDie(endpointId == 1); // this cluster is only enabled for endpoint 1.
-    VerifyOrDie(gDishwasherModeDelegate == nullptr && gDishwasherModeInstance == nullptr);
-    gDishwasherModeDelegate = new DishwasherMode::DishwasherModeDelegate;
-    gDishwasherModeInstance = new ModeBase::Instance(gDishwasherModeDelegate, endpointId, DishwasherMode::Id, 0);
-    gDishwasherModeInstance->Init();
-}
-
-void emberAfDishwasherModeClusterShutdownCallback(chip::EndpointId endpointId)
-{
-    ESP_LOGI(TAG, "DishwasherModeDelegate::emberAfDishwasherModeClusterShutdownCallback");
-
-    // VerifyOrDie(endpointId == 1); // this cluster is only enabled for endpoint 1.
-    if (gDishwasherModeInstance)
-    {
-        gDishwasherModeInstance->Shutdown();
-    }
-    DishwasherMode::Shutdown();
 }
