@@ -15,6 +15,7 @@ using namespace chip::app::Clusters::OperationalState;
 using namespace chip::app::Clusters::DishwasherMode;
 using namespace chip::Protocols::InteractionModel;
 
+
 namespace chip
 {
     namespace app
@@ -52,6 +53,11 @@ namespace chip
                         GenericOperationalState(to_underlying(OperationalStateEnum::kPaused)),
                         GenericOperationalState(to_underlying(OperationalStateEnum::kError)),
                     };
+
+                    app::DataModel::List<const GenericOperationalState> mOperationalStateList = Span<const GenericOperationalState>(opStateList);
+
+                    const CharSpan phaseList[1] = {"cleaning"_span};
+                    Span<const CharSpan> mOperationalPhaseList = Span<const CharSpan>(phaseList);
                 };
 
                 OperationalState::Instance *GetInstance();
@@ -60,46 +66,31 @@ namespace chip
                 void Shutdown();
 
             } // namespace OperationalState
-        } // namespace Clusters
-    } // namespace app
-} // namespace chip
-
-namespace chip
-{
-    namespace app
-    {
-        namespace Clusters
-        {
             namespace DishwasherMode
             {
                 const uint8_t ModeNormal = 0;
 
                 class DishwasherModeDelegate : public ModeBase::Delegate
                 {
+                    
+                public:
+                    ~DishwasherModeDelegate() override = default;
+
+                    CHIP_ERROR Init() override;
+                    void HandleChangeToMode(uint8_t mode, ModeBase::Commands::ChangeToModeResponse::Type &response) override;
+                    CHIP_ERROR GetModeLabelByIndex(uint8_t modeIndex, MutableCharSpan &label) override;
+                    CHIP_ERROR GetModeValueByIndex(uint8_t modeIndex, uint8_t &value) override;
+                    CHIP_ERROR GetModeTagsByIndex(uint8_t modeIndex, DataModel::List<detail::Structs::ModeTagStruct::Type> &tags) override;
+
                 private:
-                    using ModeTagStructType = detail::Structs::ModeTagStruct::Type;
-                    ModeTagStructType modeTagsNormal[1] = {{.value = to_underlying(ModeTag::kNormal)}};
+                    detail::Structs::ModeTagStruct::Type modeTagsNormal[1] = {{.value = to_underlying(ModeTag::kNormal)}};
 
                     const detail::Structs::ModeOptionStruct::Type kModeOptions[1] = {
                         detail::Structs::ModeOptionStruct::Type{.label = CharSpan::fromCharString("Eco 50°"),
                                                                 .mode = ModeNormal,
-                                                                .modeTags = DataModel::List<const ModeTagStructType>(modeTagsNormal)},
-                        };
-
-                    CHIP_ERROR Init() override;
-                    void HandleChangeToMode(uint8_t mode, ModeBase::Commands::ChangeToModeResponse::Type &response) override;
-
-                    CHIP_ERROR GetModeValueByIndex(uint8_t modeIndex, uint8_t &value) override;
-                    CHIP_ERROR GetModeTagsByIndex(uint8_t modeIndex, DataModel::List<ModeTagStructType> &tags) override;
-
-                public:
-                    ~DishwasherModeDelegate() override = default;
-
-                    CHIP_ERROR GetModeLabelByIndex(uint8_t modeIndex, MutableCharSpan &label) override;
-
-                    void PostAttributeChangeCallback(AttributeId attributeId, uint8_t type, uint16_t size, uint8_t *value);
-
-                    Protocols::InteractionModel::Status SetDishwasherMode(uint8_t mode);
+                                                                .modeTags = DataModel::List<const detail::Structs::ModeTagStruct::Type>(modeTagsNormal)},
+                    };
+                    
                 };
 
                 ModeBase::Instance *GetInstance();

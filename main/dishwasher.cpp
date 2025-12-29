@@ -1,14 +1,16 @@
 #include <esp_log.h>
-#include <dishwasher.h>
 #include <app-common/zap-generated/attribute-type.h>
 #include <app-common/zap-generated/cluster-enums.h>
 #include <app/util/generic-callbacks.h>
 #include <protocols/interaction_model/StatusCode.h>
 #include <esp_debug_helpers.h>
+#include "program_manager.h"
+#include "dishwasher.h"
 
 using namespace chip;
 using namespace chip::app;
 using namespace chip::app::Clusters;
+using namespace chip::app::Clusters::ModeBase;
 using namespace chip::app::Clusters::OperationalState;
 using namespace chip::app::Clusters::DishwasherMode;
 using namespace chip::app::Clusters::DeviceEnergyManagement;
@@ -17,26 +19,42 @@ using namespace chip::Protocols::InteractionModel;
 
 static const char *TAG = "dishwasher";
 
+extern program_manager_t g_program_manager;
+
 //******************************
 //* OPERATIONAL STATE DELEGATE *
 //******************************
 
 DataModel::Nullable<uint32_t> OperationalStateDelegate::GetCountdownTime()
 {
-    ESP_LOGI(TAG, "GetCountdownTime");
+    ESP_LOGI(TAG, "OperationalStateDelegate::GetCountdownTime");
     return DataModel::NullNullable;
 }
 
 CHIP_ERROR OperationalStateDelegate::GetOperationalStateAtIndex(size_t index, GenericOperationalState &operationalState)
 {
-    ESP_LOGI(TAG, "GetOperationalStateAtIndex");
-    return CHIP_ERROR_NOT_FOUND;
+    ESP_LOGI(TAG, "OperationalStateDelegate::GetOperationalStateAtIndex");
+
+    if (index > mOperationalStateList.size() - 1)
+    {
+        return CHIP_ERROR_NOT_FOUND;
+    }
+
+    operationalState = mOperationalStateList[index];
+
+    return CHIP_NO_ERROR;
 }
 
 CHIP_ERROR OperationalStateDelegate::GetOperationalPhaseAtIndex(size_t index, MutableCharSpan &operationalPhase)
 {
-    ESP_LOGI(TAG, "GetOperationalPhaseAtIndex");
-    return CHIP_ERROR_NOT_FOUND;
+    ESP_LOGI(TAG, "OperationalStateDelegate::GetOperationalPhaseAtIndex");
+
+    if (index >= mOperationalPhaseList.size())
+    {
+        return CHIP_ERROR_NOT_FOUND;
+    }
+
+    return CopyCharSpanToMutableCharSpan(mOperationalPhaseList[index], operationalPhase);
 }
 
 void OperationalStateDelegate::HandlePauseStateCallback(GenericOperationalError &err)
@@ -95,26 +113,26 @@ OperationalState::OperationalStateDelegate *OperationalState::GetDelegate()
     return gOperationalStateDelegate;
 }
 
-void emberAfOperationalStateClusterInitCallback(chip::EndpointId endpointId)
-{
-    ESP_LOGI(TAG, "emberAfOperationalStateClusterInitCallback()");
+// void emberAfOperationalStateClusterInitCallback(chip::EndpointId endpointId)
+// {
+//     ESP_LOGI(TAG, "emberAfOperationalStateClusterInitCallback()");
 
-    VerifyOrDie(endpointId == 1); // this cluster is only enabled for endpoint 1.
-    VerifyOrDie(gOperationalStateInstance == nullptr && gOperationalStateDelegate == nullptr);
+//     // VerifyOrDie(endpointId == 1); // this cluster is only enabled for endpoint 1.
+//     VerifyOrDie(gOperationalStateInstance == nullptr && gOperationalStateDelegate == nullptr);
 
-    gOperationalStateDelegate = new OperationalStateDelegate;
-    EndpointId operationalStateEndpoint = 0x01;
-    gOperationalStateInstance = new OperationalState::Instance(gOperationalStateDelegate, operationalStateEndpoint);
+//     gOperationalStateDelegate = new OperationalStateDelegate;
+//     EndpointId operationalStateEndpoint = 0x01;
+//     gOperationalStateInstance = new OperationalState::Instance(gOperationalStateDelegate, operationalStateEndpoint);
 
-    gOperationalStateInstance->SetOperationalState(to_underlying(OperationalState::OperationalStateEnum::kStopped));
-    gOperationalStateInstance->SetCurrentPhase(0);
+//     gOperationalStateInstance->SetOperationalState(to_underlying(OperationalState::OperationalStateEnum::kStopped));
+//     gOperationalStateInstance->SetCurrentPhase(0);
 
-    gOperationalStateInstance->Init();
+//     gOperationalStateInstance->Init();
 
-    uint8_t value = to_underlying(OperationalStateEnum::kStopped);
-    gOperationalStateDelegate->PostAttributeChangeCallback(chip::app::Clusters::OperationalState::Attributes::OperationalState::Id, ZCL_INT8U_ATTRIBUTE_TYPE, sizeof(uint8_t), &value);
-    gOperationalStateDelegate->PostAttributeChangeCallback(chip::app::Clusters::OperationalState::Attributes::CurrentPhase::Id, ZCL_INT8U_ATTRIBUTE_TYPE, sizeof(uint8_t), 0);
-}
+//     uint8_t value = to_underlying(OperationalStateEnum::kStopped);
+//     gOperationalStateDelegate->PostAttributeChangeCallback(chip::app::Clusters::OperationalState::Attributes::OperationalState::Id, ZCL_INT8U_ATTRIBUTE_TYPE, sizeof(uint8_t), &value);
+//     gOperationalStateDelegate->PostAttributeChangeCallback(chip::app::Clusters::OperationalState::Attributes::CurrentPhase::Id, ZCL_INT8U_ATTRIBUTE_TYPE, sizeof(uint8_t), 0);
+// }
 
 //****************************
 //* DISHWASHER MODE DELEGATE *
@@ -142,7 +160,7 @@ void DishwasherModeDelegate::HandleChangeToMode(uint8_t NewMode, ModeBase::Comma
 
 CHIP_ERROR DishwasherModeDelegate::GetModeLabelByIndex(uint8_t modeIndex, chip::MutableCharSpan &label)
 {
-    ESP_LOGI(TAG, "DishwasherModeDelegate::GetModeLabelByIndex()");
+    ESP_LOGI(TAG, "DishwasherModeDelegate::GetModeLabelByIndex(%d)", modeIndex);
 
     if (modeIndex >= MATTER_ARRAY_SIZE(kModeOptions))
     {
@@ -164,7 +182,7 @@ CHIP_ERROR DishwasherModeDelegate::GetModeValueByIndex(uint8_t modeIndex, uint8_
     }
     value = kModeOptions[modeIndex].mode;
 
-    return CHIP_ERROR_PROVIDER_LIST_EXHAUSTED;
+    return CHIP_NO_ERROR;
 }
 
 CHIP_ERROR DishwasherModeDelegate::GetModeTagsByIndex(uint8_t modeIndex, List<ModeTagStructType> &tags)
@@ -187,35 +205,30 @@ CHIP_ERROR DishwasherModeDelegate::GetModeTagsByIndex(uint8_t modeIndex, List<Mo
     return CHIP_NO_ERROR;
 }
 
-Status DishwasherModeDelegate::SetDishwasherMode(uint8_t modeValue)
-{
-    ESP_LOGI(TAG, "DishwasherModeDelegate::SetDishwasherMode");
+// Status DishwasherModeDelegate::SetDishwasherMode(uint8_t modeValue)
+// {
+//     ESP_LOGI(TAG, "DishwasherModeDelegate::SetDishwasherMode");
 
-    // We can only update the DishwasherMode when it's not running.
-    //
+//     // We can only update the DishwasherMode when it's not running.
+//     //
 
-    VerifyOrReturnError(DishwasherMode::GetInstance() != nullptr, Status::InvalidInState);
+//     VerifyOrReturnError(DishwasherMode::GetInstance() != nullptr, Status::InvalidInState);
 
-    if (!DishwasherMode::GetInstance()->IsSupportedMode(modeValue))
-    {
-        ChipLogError(AppServer, "SetDishwasherMode bad mode");
-        return Status::ConstraintError;
-    }
+//     if (!DishwasherMode::GetInstance()->IsSupportedMode(modeValue))
+//     {
+//         ChipLogError(AppServer, "SetDishwasherMode bad mode");
+//         return Status::ConstraintError;
+//     }
 
-    Status status = DishwasherMode::GetInstance()->UpdateCurrentMode(modeValue);
-    if (status != Status::Success)
-    {
-        ChipLogError(AppServer, "SetDishwasherMode updateMode failed 0x%02x", to_underlying(status));
-        return status;
-    }
+//     Status status = DishwasherMode::GetInstance()->UpdateCurrentMode(modeValue);
+//     if (status != Status::Success)
+//     {
+//         ChipLogError(AppServer, "SetDishwasherMode updateMode failed 0x%02x", to_underlying(status));
+//         return status;
+//     }
 
-    return chip::Protocols::InteractionModel::Status::Success;
-}
-
-void DishwasherModeDelegate::PostAttributeChangeCallback(AttributeId attributeId, uint8_t type, uint16_t size, uint8_t *value)
-{
-    ESP_LOGI(TAG, "DishwasherModeDelegate::PostAttributeChangeCallback");
-}
+//     return chip::Protocols::InteractionModel::Status::Success;
+// }
 
 ModeBase::Instance *DishwasherMode::GetInstance()
 {
@@ -245,10 +258,10 @@ void emberAfDishwasherModeClusterInitCallback(chip::EndpointId endpointId)
 {
     ESP_LOGI(TAG, "DishwasherModeDelegate::emberAfDishwasherModeClusterInitCallback");
 
-    VerifyOrDie(endpointId == 1); // this cluster is only enabled for endpoint 1.
+    // VerifyOrDie(endpointId == 1); // this cluster is only enabled for endpoint 1.
     VerifyOrDie(gDishwasherModeDelegate == nullptr && gDishwasherModeInstance == nullptr);
     gDishwasherModeDelegate = new DishwasherMode::DishwasherModeDelegate;
-    gDishwasherModeInstance = new ModeBase::Instance(gDishwasherModeDelegate, 0x1, DishwasherMode::Id, 0);
+    gDishwasherModeInstance = new ModeBase::Instance(gDishwasherModeDelegate, endpointId, DishwasherMode::Id, 0);
     gDishwasherModeInstance->Init();
 }
 
@@ -256,7 +269,7 @@ void emberAfDishwasherModeClusterShutdownCallback(chip::EndpointId endpointId)
 {
     ESP_LOGI(TAG, "DishwasherModeDelegate::emberAfDishwasherModeClusterShutdownCallback");
 
-    VerifyOrDie(endpointId == 1); // this cluster is only enabled for endpoint 1.
+    // VerifyOrDie(endpointId == 1); // this cluster is only enabled for endpoint 1.
     if (gDishwasherModeInstance)
     {
         gDishwasherModeInstance->Shutdown();

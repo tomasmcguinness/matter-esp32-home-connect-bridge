@@ -15,6 +15,9 @@
 
 #include <esp_matter.h>
 #include <esp_matter_bridge.h>
+#include <esp_matter_console.h>
+#include <esp_matter_console_bridge.h>
+
 #include <app/server/Server.h>
 #include <setup_payload/OnboardingCodesUtil.h>
 #include <setup_payload/QRCodeSetupPayloadGenerator.h>
@@ -43,6 +46,8 @@
 #include "dishwasher.h"
 #include "program_manager.h"
 
+#include "bridge.h"
+
 static const char *TAG = "app";
 
 #define NVS_NAMESPACE "home_connect"
@@ -69,6 +74,10 @@ static EventGroupHandle_t s_wifi_event_group;
 spi_device_handle_t spi;
 
 program_manager_t g_program_manager = {0};
+
+constexpr auto k_timeout_seconds = 300;
+
+uint16_t aggregator_endpoint_id = chip::kInvalidEndpointId;
 
 void esp_qrcode_print_display(esp_qrcode_handle_t qrcode)
 {
@@ -204,7 +213,7 @@ endpoint_t *dishwasher_endpoint;
 
 void create_basic_dishwasher()
 {
-    ESP_LOGE(TAG, "Creating Dishwasher device");
+    ESP_LOGI(TAG, "Creating Dishwasher device...");
 
     node_t *node = node::get();
     static OperationalStateDelegate operational_state_delegate;
@@ -250,6 +259,34 @@ void add_features_to_dishwasher()
     esp_matter::cluster::mode_base::attribute::create_supported_modes(dishwasher_mode_cluster, NULL, 0, 0);
 
     esp_matter::cluster::mode_base::command::create_change_to_mode(dishwasher_mode_cluster);
+
+    node_t *node = node::get();
+    esp_matter::cluster_t *basic_information_cluster = esp_matter::cluster::get(endpoint::get(node, 0x0), chip::app::Clusters::BasicInformation::Id);
+
+    if (basic_information_cluster == NULL)
+    {
+        ESP_LOGE(TAG, "Basic Information cluster is not present");
+        return;
+    }
+
+    attribute_t *attribute = esp_matter::attribute::get(0x00, chip::app::Clusters::BasicInformation::Id, chip::app::Clusters::BasicInformation::Attributes::ConfigurationVersion::Id);
+
+    if (attribute == NULL)
+    {
+        ESP_LOGE(TAG, "ConfigurationVersion attribute is not present");
+        return;
+    }
+
+    esp_matter_attr_val_t val = esp_matter_invalid(NULL);
+    attribute::get_val(attribute, &val);
+
+    ESP_LOGI(TAG, "ConfigurationVersion attribute: %lu", val.val.u32);
+
+    val.val.u32++;
+
+    attribute::set_val(attribute, &val);
+
+    ESP_LOGI(TAG, "ConfigurationVersion attribute after: %lu", val.val.u32);
 }
 
 esp_err_t set_access_token(nvs_handle_t nvs_handle, esp_http_client_handle_t client)
@@ -539,6 +576,9 @@ void run_loop(void *pvParameters)
 
                             nvs_set_str(nvs_handle, "ha_id", haIdJSON->valuestring);
                             nvs_commit(nvs_handle);
+
+                            ESP_LOGI(TAG, "Creating bridged device...");
+                            app_bridge_create_bridged_device(node::get(), aggregator_endpoint_id, ESP_MATTER_DISH_WASHER_DEVICE_TYPE_ID, NULL);
                         }
                     }
                 }
@@ -607,6 +647,7 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
 
             if (GetQRCode(qrCode, payload) == CHIP_NO_ERROR)
             {
+                lcd_clear(spi);
                 esp_qrcode_generate(&cfg, qrCode.data());
             }
             else
@@ -614,8 +655,30 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
                 ESP_LOGE(TAG, "Failed to generate the commissioning QR code");
             }
         }
-
         break;
+    case chip::DeviceLayer::DeviceEventType::kFabricRemoved:
+    {
+        ESP_LOGI(TAG, "Fabric removed successfully");
+        if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0)
+        {
+            chip::CommissioningWindowManager &commissionMgr = chip::Server::GetInstance().GetCommissioningWindowManager();
+            constexpr auto kTimeoutSeconds = chip::System::Clock::Seconds16(k_timeout_seconds);
+            if (!commissionMgr.IsCommissioningWindowOpen())
+            {
+                /* After removing last fabric, this example does not remove the Wi-Fi credentials
+                 * and still has IP connectivity so, only advertising on DNS-SD.
+                 */
+                CHIP_ERROR err = commissionMgr.OpenBasicCommissioningWindow(kTimeoutSeconds,
+                                                                            chip::CommissioningWindowAdvertisement::kDnssdOnly);
+                if (err != CHIP_NO_ERROR)
+                {
+                    ESP_LOGE(TAG, "Failed to open commissioning window, err:%" CHIP_ERROR_FORMAT, err.Format());
+                }
+            }
+        }
+        esp_matter::factory_reset();
+        break;
+    }
     default:
         break;
     }
@@ -639,6 +702,55 @@ void lcd_spi_pre_transfer_callback(spi_transaction_t *t)
 {
     int dc = (int)t->user;
     gpio_set_level((gpio_num_t)PIN_NUM_DC, dc);
+}
+
+esp_err_t create_bridge_devices(esp_matter::endpoint_t *ep, uint32_t device_type_id, void *priv_data)
+{
+    esp_err_t err = ESP_OK;
+
+    switch (device_type_id)
+    {
+    case ESP_MATTER_DISH_WASHER_DEVICE_TYPE_ID:
+    {
+        ESP_LOGI(TAG, "Creating bridged Dishwasher device...");
+
+        static OperationalStateDelegate operational_state_delegate;
+
+        dish_washer::config_t dish_washer_config;
+        dish_washer_config.operational_state.delegate = &operational_state_delegate;
+
+        err = dish_washer::add(ep, &dish_washer_config);
+
+        esp_matter::cluster_t *operational_state_cluster = esp_matter::cluster::get(ep, chip::app::Clusters::OperationalState::Id);
+
+        esp_matter::cluster::operational_state::attribute::create_countdown_time(operational_state_cluster, 0);
+
+        esp_matter::cluster::operational_state::command::create_start(operational_state_cluster);
+        esp_matter::cluster::operational_state::command::create_stop(operational_state_cluster);
+        esp_matter::cluster::operational_state::command::create_pause(operational_state_cluster);
+        esp_matter::cluster::operational_state::command::create_resume(operational_state_cluster);
+
+        static DishwasherModeDelegate dishwasher_mode_delegate;
+
+        esp_matter::cluster::dish_washer_mode::config_t dish_washer_mode_config;
+        dish_washer_mode_config.delegate = &dishwasher_mode_delegate;
+        dish_washer_mode_config.current_mode = ModeNormal;
+
+        esp_matter::cluster_t *dishwasher_mode_cluster = esp_matter::cluster::dish_washer_mode::create(ep, &dish_washer_mode_config, CLUSTER_FLAG_SERVER);
+
+        esp_matter::cluster::mode_base::attribute::create_supported_modes(dishwasher_mode_cluster, NULL, 0, 0);
+
+        esp_matter::cluster::mode_base::command::create_change_to_mode(dishwasher_mode_cluster);
+
+        break;
+    }
+    default:
+    {
+        ESP_LOGE(TAG, "Unsupported bridged matter device type");
+        return ESP_ERR_INVALID_ARG;
+    }
+    }
+    return err;
 }
 
 extern "C" void app_main(void)
@@ -695,61 +807,107 @@ extern "C" void app_main(void)
     gpio_set_level((gpio_num_t)7, true);
     ESP_LOGI(TAG, "Applied power to display");
 
-    lcd_init(spi);
+    // lcd_init(spi);
 
-    lcd_clear(spi);
+    // lcd_clear(spi);
 
-    lcd_draw_string(spi, 10, 5, 48, "Choose Program");
+    // lcd_draw_string(spi, 10, 5, 48, "Choose Program");
 
-    program_t *current = g_program_manager.program_list;
+    // program_t *current = g_program_manager.program_list;
 
-    int row = 0;
+    // int row = 0;
 
-    uint16_t y = 58;
+    // uint16_t y = 58;
 
-    while (current != NULL)
-    {
-        if (row++ == 0)
-        {
-            lcd_draw_string(spi, 10, y, 24, ">");
-        }
-        lcd_draw_string(spi, 34, y, 24, current->name);
-        y += 24;
+    // while (current != NULL)
+    // {
+    //     if (row++ == 0)
+    //     {
+    //         lcd_draw_string(spi, 10, y, 24, ">");
+    //     }
+    //     lcd_draw_string(spi, 34, y, 24, current->name);
+    //     y += 24;
 
-        current = current->next;
-    }
+    //     current = current->next;
+    // }
 
-    lcd_draw(spi);
+    // lcd_draw(spi);
 
     node::config_t node_config;
     node_t *node = node::create(&node_config, app_attribute_update_cb, app_identification_cb);
     ABORT_APP_ON_FAILURE(node != nullptr, ESP_LOGE(TAG, "Failed to create Matter node"));
 
-    create_basic_dishwasher();
+    static OperationalStateDelegate operational_state_delegate;
+
+    dish_washer::config_t dish_washer_config;
+    dish_washer_config.operational_state.delegate = &operational_state_delegate;
+
+    endpoint_t *ep = dish_washer::create(node, &dish_washer_config, ENDPOINT_FLAG_NONE, NULL);
+
+    esp_matter::cluster_t *operational_state_cluster = esp_matter::cluster::get(ep, chip::app::Clusters::OperationalState::Id);
+
+    esp_matter::cluster::operational_state::attribute::create_countdown_time(operational_state_cluster, 0);
+
+    esp_matter::cluster::operational_state::command::create_start(operational_state_cluster);
+    esp_matter::cluster::operational_state::command::create_stop(operational_state_cluster);
+    esp_matter::cluster::operational_state::command::create_pause(operational_state_cluster);
+    esp_matter::cluster::operational_state::command::create_resume(operational_state_cluster);
+
+    static DishwasherModeDelegate dishwasher_mode_delegate;
+
+    esp_matter::cluster::dish_washer_mode::config_t dish_washer_mode_config;
+    dish_washer_mode_config.delegate = &dishwasher_mode_delegate;
+    dish_washer_mode_config.current_mode = ModeNormal;
+
+    esp_matter::cluster_t *dishwasher_mode_cluster = esp_matter::cluster::dish_washer_mode::create(ep, &dish_washer_mode_config, CLUSTER_FLAG_SERVER);
+
+    esp_matter::cluster::mode_base::attribute::create_supported_modes(dishwasher_mode_cluster, NULL, 0, 0);
+
+    esp_matter::cluster::mode_base::command::create_change_to_mode(dishwasher_mode_cluster);
+
+    // aggregator::config_t aggregator_config;
+    // endpoint_t *aggregator = endpoint::aggregator::create(node, &aggregator_config, ENDPOINT_FLAG_NONE, NULL);
+    // ABORT_APP_ON_FAILURE(aggregator != nullptr, ESP_LOGE(TAG, "Failed to create aggregator endpoint"));
+
+    // aggregator_endpoint_id = endpoint::get_id(aggregator);
+
+    // create_basic_dishwasher();
 
     // If we have an dishwasher, be sure to create the endpoint, since it's dynamic
     //
-    nvs_handle_t nvs_handle;
-    err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
-    if (err == ESP_OK && nvs_find_key(nvs_handle, "ha_id", NULL) == ESP_OK)
-    {
-        add_features_to_dishwasher();
-    }
-    nvs_close(nvs_handle);
+    // nvs_handle_t nvs_handle;
+    // err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
+    // if (err == ESP_OK && nvs_find_key(nvs_handle, "ha_id", NULL) == ESP_OK)
+    // {
+    //     add_features_to_dishwasher();
+    // }
+    // nvs_close(nvs_handle);
 
     err = esp_matter::start(app_event_cb);
     ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to start Matter, err:%d", err));
 
-    TaskHandle_t xHandle = NULL;
+    // err = app_bridge_initialize(node, create_bridge_devices);
+    // ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to resume the bridged endpoints: %d", err));
 
-    /* Create the task, storing the handle. */
-    xTaskCreate(
-        run_loop,         /* Function that implements the task. */
-        "NAME",           /* Text name for the task. */
-        5 * 1024,         /* Stack size in words, not bytes. */
-        NULL,             /* Parameter passed into the task. */
-        tskIDLE_PRIORITY, /* Priority at which the task is created. */
-        &xHandle);
+    // esp_matter_bridge::device_t *dishwasher = esp_matter_bridge::resume_device(node, 0x02, NULL);
+    // esp_matter::endpoint::enable(dishwasher->endpoint);
+
+    // app_bridge_create_bridged_device(node::get(), aggregator_endpoint_id, ESP_MATTER_DISH_WASHER_DEVICE_TYPE_ID, NULL);
+
+    // TaskHandle_t xHandle = NULL;
+
+    // /* Create the task, storing the handle. */
+    // xTaskCreate(
+    //     run_loop,         /* Function that implements the task. */
+    //     "NAME",           /* Text name for the task. */
+    //     5 * 1024,         /* Stack size in words, not bytes. */
+    //     NULL,             /* Parameter passed into the task. */
+    //     tskIDLE_PRIORITY, /* Priority at which the task is created. */
+    //     &xHandle);
+
+    // esp_matter::console::bridge_register_commands();
+    // esp_matter::console::factoryreset_register_commands();
+    // esp_matter::console::init();
 
     ESP_LOGI(TAG, "All done!");
 }
