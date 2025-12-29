@@ -46,6 +46,23 @@ void program_manager_init(program_manager_t *manager)
     }
 }
 
+program_t *find_program(program_manager_t *manager, uint8_t program_id)
+{
+    program_t *current = manager->program_list;
+
+    while (current != NULL)
+    {
+        if (current->program_id == program_id)
+        {
+            return current;
+        }
+
+        current = current->next;
+    }
+
+    return NULL;
+}
+
 program_t *add_program(program_manager_t *manager, char *key, char *name)
 {
     program_t *new_program = (program_t *)malloc(sizeof(program_t));
@@ -57,6 +74,7 @@ program_t *add_program(program_manager_t *manager, char *key, char *name)
 
     memset(new_program, 0, sizeof(program_t));
 
+    new_program->program_id = manager->program_count;
     new_program->key = key;
     new_program->name = name;
     new_program->next = manager->program_list;
@@ -126,6 +144,9 @@ esp_err_t load_programs_from_nvs(program_manager_t *manager)
             return ESP_ERR_NO_MEM;
         }
 
+        program->program_id = *((uint8_t *)ptr);
+        ptr += sizeof(uint8_t);
+
         program->key_length = *((uint8_t *)ptr);
         ptr += sizeof(uint8_t);
 
@@ -182,6 +203,7 @@ esp_err_t save_programs_to_nvs(program_manager_t *manager)
     while (current)
     {
         ESP_LOGI(TAG,"Saving %s:%u", current->key, strlen(current->key));
+        required_size += sizeof(uint8_t); // program_id
         required_size += sizeof(uint8_t); // key length
         required_size += strlen(current->key);
         required_size += sizeof(uint8_t); // name length
@@ -206,6 +228,9 @@ esp_err_t save_programs_to_nvs(program_manager_t *manager)
     current = manager->program_list;
     while (current)
     {
+        *((uint8_t *)ptr) = current->program_id;
+        ptr += sizeof(uint8_t);
+
         *((uint8_t *)ptr) = strlen(current->key);
         ptr += sizeof(uint8_t);
 

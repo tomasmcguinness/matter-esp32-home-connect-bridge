@@ -162,47 +162,59 @@ CHIP_ERROR DishwasherModeDelegate::GetModeLabelByIndex(uint8_t modeIndex, chip::
 {
     ESP_LOGI(TAG, "DishwasherModeDelegate::GetModeLabelByIndex(%d)", modeIndex);
 
-    if (modeIndex >= MATTER_ARRAY_SIZE(kModeOptions))
+    if (modeIndex >= g_program_manager.program_count)
     {
         ESP_LOGI(TAG, "CHIP_ERROR_PROVIDER_LIST_EXHAUSTED");
         return CHIP_ERROR_PROVIDER_LIST_EXHAUSTED;
     }
 
-    return chip::CopyCharSpanToMutableCharSpan(kModeOptions[modeIndex].label, label);
+    program_t *program = find_program(&g_program_manager, modeIndex);
+
+    return chip::CopyCharSpanToMutableCharSpan(CharSpan::fromCharString(program->name), label);
 }
 
 CHIP_ERROR DishwasherModeDelegate::GetModeValueByIndex(uint8_t modeIndex, uint8_t &value)
 {
     ESP_LOGI(TAG, "DishwasherModeDelegate::GetModeValueByIndex(%d)", modeIndex);
 
-    if (modeIndex >= MATTER_ARRAY_SIZE(kModeOptions))
+    if (modeIndex >= g_program_manager.program_count)
     {
         ESP_LOGI(TAG, "CHIP_ERROR_PROVIDER_LIST_EXHAUSTED");
         return CHIP_ERROR_PROVIDER_LIST_EXHAUSTED;
     }
-    value = kModeOptions[modeIndex].mode;
+
+    program_t *program = find_program(&g_program_manager, modeIndex);
+
+    value = program->program_id;
 
     return CHIP_NO_ERROR;
 }
 
 CHIP_ERROR DishwasherModeDelegate::GetModeTagsByIndex(uint8_t modeIndex, List<ModeTagStructType> &tags)
 {
-    ESP_LOGI(TAG, "DishwasherModeDelegate::GetModeTagsByIndex()");
+    ESP_LOGI(TAG, "DishwasherModeDelegate::GetModeTagsByIndex(%d)", modeIndex);
 
-    if (modeIndex >= MATTER_ARRAY_SIZE(kModeOptions))
+    if (modeIndex >= g_program_manager.program_count)
     {
         return CHIP_ERROR_PROVIDER_LIST_EXHAUSTED;
     }
 
-    if (tags.size() < kModeOptions[modeIndex].modeTags.size())
-    {
-        return CHIP_ERROR_INVALID_ARGUMENT;
-    }
+    // if (tags.size() < kModeOptions[modeIndex].modeTags.size())
+    // {
+    //     return CHIP_ERROR_INVALID_ARGUMENT;
+    // }
 
-    std::copy(kModeOptions[modeIndex].modeTags.begin(), kModeOptions[modeIndex].modeTags.end(), tags.begin());
-    tags.reduce_size(kModeOptions[modeIndex].modeTags.size());
+    // std::copy(kModeOptions[modeIndex].modeTags.begin(), kModeOptions[modeIndex].modeTags.end(), tags.begin());
+    // tags.reduce_size(kModeOptions[modeIndex].modeTags.size());
 
-    return CHIP_NO_ERROR;
+    detail::Structs::ModeTagStruct::Type modeTagsNormal[1] = {{.value = to_underlying(ModeTag::kNormal)}};
+
+    DataModel::List<const detail::Structs::ModeTagStruct::Type> modeTags = DataModel::List<const detail::Structs::ModeTagStruct::Type>(modeTagsNormal);
+
+    std::copy(modeTags.begin(), modeTags.end(), tags.begin());
+    tags.reduce_size(modeTags.size());
+
+        return CHIP_NO_ERROR;
 }
 
 // Status DishwasherModeDelegate::SetDishwasherMode(uint8_t modeValue)

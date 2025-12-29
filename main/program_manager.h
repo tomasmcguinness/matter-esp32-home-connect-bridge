@@ -4,6 +4,7 @@
 
 typedef struct program
 {
+    uint8_t program_id;
     uint8_t key_length;
     char *key;
     uint8_t name_length;
@@ -22,6 +23,7 @@ typedef struct
 
 void program_manager_init(program_manager_t *manager);
 
+program_t *find_program(program_manager_t *manager, uint8_t program_id);
 program_t *add_program(program_manager_t *manager, char *key, char *name);
 
 esp_err_t save_programs_to_nvs(program_manager_t *manager);

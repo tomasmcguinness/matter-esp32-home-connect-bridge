@@ -807,9 +807,9 @@ extern "C" void app_main(void)
     gpio_set_level((gpio_num_t)7, true);
     ESP_LOGI(TAG, "Applied power to display");
 
-    // lcd_init(spi);
+    lcd_init(spi);
 
-    // lcd_clear(spi);
+    lcd_clear(spi);
 
     // lcd_draw_string(spi, 10, 5, 48, "Choose Program");
 
@@ -894,16 +894,16 @@ extern "C" void app_main(void)
 
     // app_bridge_create_bridged_device(node::get(), aggregator_endpoint_id, ESP_MATTER_DISH_WASHER_DEVICE_TYPE_ID, NULL);
 
-    // TaskHandle_t xHandle = NULL;
+    TaskHandle_t xHandle = NULL;
 
-    // /* Create the task, storing the handle. */
-    // xTaskCreate(
-    //     run_loop,         /* Function that implements the task. */
-    //     "NAME",           /* Text name for the task. */
-    //     5 * 1024,         /* Stack size in words, not bytes. */
-    //     NULL,             /* Parameter passed into the task. */
-    //     tskIDLE_PRIORITY, /* Priority at which the task is created. */
-    //     &xHandle);
+    /* Create the task, storing the handle. */
+    xTaskCreate(
+        run_loop,         /* Function that implements the task. */
+        "NAME",           /* Text name for the task. */
+        5 * 1024,         /* Stack size in words, not bytes. */
+        NULL,             /* Parameter passed into the task. */
+        tskIDLE_PRIORITY, /* Priority at which the task is created. */
+        &xHandle);
 
     // esp_matter::console::bridge_register_commands();
     // esp_matter::console::factoryreset_register_commands();
