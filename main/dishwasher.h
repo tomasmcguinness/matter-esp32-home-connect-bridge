@@ -6,6 +6,7 @@
 #include <app/clusters/mode-base-server/mode-base-server.h>
 #include <app/clusters/mode-base-server/mode-base-cluster-objects.h>
 #include <app/clusters/operational-state-server/operational-state-server.h>
+#include "esp_http_client.h"
 
 using namespace chip;
 using namespace chip::app;
@@ -15,6 +16,8 @@ using namespace chip::app::Clusters::OperationalState;
 using namespace chip::app::Clusters::DishwasherMode;
 using namespace chip::Protocols::InteractionModel;
 
+
+esp_err_t start_selected_program();
 
 namespace chip
 {
@@ -66,6 +69,7 @@ namespace chip
                 void Shutdown();
 
             } // namespace OperationalState
+            
             namespace DishwasherMode
             {
                 const uint8_t ModeNormal = 0;
@@ -90,7 +94,7 @@ namespace chip
                                                                 .mode = ModeNormal,
                                                                 .modeTags = DataModel::List<const detail::Structs::ModeTagStruct::Type>(modeTagsNormal)},
                     };
-                    
+
                 };
 
                 ModeBase::Instance *GetInstance();

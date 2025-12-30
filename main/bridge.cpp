@@ -52,7 +52,10 @@ esp_err_t app_bridge_initialize(node_t *node, esp_matter_bridge::bridge_device_t
         }
     }
 
+    chip::DeviceLayer::PlatformMgr().LockChipStack();
+    esp_matter::cluster::plugin_init_callback_common();
     esp_matter::cluster::delegate_init_callback_common();
+    chip::DeviceLayer::PlatformMgr().UnlockChipStack();
 
     return err;
 }

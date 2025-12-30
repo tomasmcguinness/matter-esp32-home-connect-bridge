@@ -48,6 +48,9 @@
 
 #include "bridge.h"
 
+#include "iot_button.h"
+#include "button_gpio.h"
+
 static const char *TAG = "app";
 
 #define NVS_NAMESPACE "home_connect"
@@ -79,9 +82,13 @@ constexpr auto k_timeout_seconds = 300;
 
 uint16_t aggregator_endpoint_id = chip::kInvalidEndpointId;
 
-void esp_qrcode_print_display(esp_qrcode_handle_t qrcode)
+void esp_qrcode_print_home_connect(esp_qrcode_handle_t qrcode)
 {
-    ESP_LOGI(TAG, "Displaying the QR Code");
+    ESP_LOGI(TAG, "Displaying a QR code");
+
+    lcd_clear(spi);
+
+    lcd_draw_string(spi, 10, 5, 48, "Home Connect QR");
 
     int size = esp_qrcode_get_size(qrcode);
 
@@ -94,7 +101,33 @@ void esp_qrcode_print_display(esp_qrcode_handle_t qrcode)
         for (int x = 0; x < size; x++)
         {
             black_pixel = esp_qrcode_get_module(qrcode, x, y);
-            lcd_set_pixel(x, y, black_pixel);
+            lcd_set_pixel(x + 10, y + 58, black_pixel);
+        }
+    }
+
+    lcd_draw(spi);
+}
+
+void esp_qrcode_print_matter_code(esp_qrcode_handle_t qrcode)
+{
+    ESP_LOGI(TAG, "Displaying the Matter QR code");
+
+    lcd_clear(spi);
+
+    lcd_draw_string(spi, 10, 5, 48, "Matter QR");
+
+    int size = esp_qrcode_get_size(qrcode);
+
+    bool black_pixel = 0;
+
+    ESP_LOGI(TAG, "QR Code Size: %d", size);
+
+    for (int y = 0; y < size; y++)
+    {
+        for (int x = 0; x < size; x++)
+        {
+            black_pixel = esp_qrcode_get_module(qrcode, x, y);
+            lcd_set_pixel(x + 10, y + 58, black_pixel);
         }
     }
 
@@ -300,6 +333,8 @@ esp_err_t fetch_programs(esp_http_client_handle_t client, char *haId)
 
 void run_loop(void *pvParameters)
 {
+    bool shown_programs = false;
+
     nvs_handle_t nvs_handle;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
     if (err != ESP_OK)
@@ -378,7 +413,7 @@ void run_loop(void *pvParameters)
                 // Show the QR code to the user to scan.
                 //
                 esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
-                cfg.display_func = esp_qrcode_print_display;
+                cfg.display_func = esp_qrcode_print_home_connect;
 
                 esp_qrcode_generate(&cfg, completeVerificationUriJSON->valuestring);
 
@@ -499,29 +534,6 @@ void run_loop(void *pvParameters)
                             nvs_set_str(nvs_handle, "ha_id", haIdJSON->valuestring);
                             nvs_commit(nvs_handle);
 
-                            lcd_clear(spi);
-                            lcd_draw_string(spi, 10, 5, 48, "Choose Program");
-
-                            program_t *current = g_program_manager.program_list;
-
-                            int row = 0;
-
-                            uint16_t y = 58;
-
-                            while (current != NULL)
-                            {
-                                if (row++ == 0)
-                                {
-                                    lcd_draw_string(spi, 10, y, 24, ">");
-                                }
-                                lcd_draw_string(spi, 34, y, 24, current->name);
-                                y += 24;
-
-                                current = current->next;
-                            }
-
-                            lcd_draw(spi);
-
                             ESP_LOGI(TAG, "Creating bridged device...");
                             app_bridge_create_bridged_device(node::get(), aggregator_endpoint_id, ESP_MATTER_DISH_WASHER_DEVICE_TYPE_ID, NULL);
                         }
@@ -531,6 +543,36 @@ void run_loop(void *pvParameters)
             else
             {
                 ESP_LOGI(TAG, "Loop...");
+
+                if (!shown_programs)
+                {
+                    shown_programs = true;
+
+                    
+                    lcd_clear(spi);
+                    lcd_draw_string(spi, 10, 5, 48, "Choose Program");
+
+                    program_t *current = g_program_manager.program_list;
+
+                    int row = 0;
+
+                    uint16_t y = 58;
+
+                    while (current != NULL)
+                    {
+                        if (row++ == 0)
+                        {
+                            lcd_draw_string(spi, 10, y, 24, ">");
+                        }
+                        lcd_draw_string(spi, 34, y, 24, current->name);
+                        y += 24;
+
+                        current = current->next;
+                    }
+
+                    lcd_draw(spi);
+                }
+                
                 vTaskDelay(10000 / portTICK_PERIOD_MS);
             }
         }
@@ -550,54 +592,40 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
             // We have connected to the network!
             //
             xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
-
-            // char *local_response_buffer = (char *)malloc(MAX_HTTP_OUTPUT_BUFFER + 1);
-
-            // esp_http_client_config_t config = {
-            //     .url = "https://api.home-connect.com/security/oauth/device_authorization",
-            //     .method = HTTP_METHOD_POST,
-            //     .event_handler = _http_event_handler,
-            //     .buffer_size_tx = 2048,
-            //     .user_data = local_response_buffer,
-            //     .crt_bundle_attach = esp_crt_bundle_attach,
-            // };
-            // esp_http_client_handle_t client = esp_http_client_init(&config);
-            // esp_http_client_set_header(client, "Accept-Language", "en-gb");
-
-            // nvs_handle_t nvs_handle;
-            // esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
-
-            // set_access_token(nvs_handle, client);
-
-            // fetch_programs(client, "012050425733000093");
         }
         break;
     case chip::DeviceLayer::DeviceEventType::kCommissioningComplete:
         ESP_LOGI(TAG, "Commissioning complete");
-        // lcd_clear(spi);
+        lcd_clear(spi);
+
         break;
     case chip::DeviceLayer::DeviceEventType::kCommissioningWindowOpened:
         ESP_LOGI(TAG, "Commissioning window opened");
         {
-            chip::RendezvousInformationFlags rendezvoudFlags = chip::RendezvousInformationFlags(chip::RendezvousInformationFlag::kBLE);
-
-            chip::PayloadContents payload;
-            GetPayloadContents(payload, rendezvoudFlags);
-
-            char payloadBuffer[chip::QRCodeBasicSetupPayloadGenerator::kMaxQRCodeBase38RepresentationLength + 1];
-            chip::MutableCharSpan qrCode(payloadBuffer);
-
-            esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
-            cfg.display_func = esp_qrcode_print_display;
-
-            if (GetQRCode(qrCode, payload) == CHIP_NO_ERROR)
+            // Only show the code if we have no fabrics.
+            //
+            if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0)
             {
-                lcd_clear(spi);
-                esp_qrcode_generate(&cfg, qrCode.data());
-            }
-            else
-            {
-                ESP_LOGE(TAG, "Failed to generate the commissioning QR code");
+                chip::RendezvousInformationFlags rendezvoudFlags = chip::RendezvousInformationFlags(chip::RendezvousInformationFlag::kBLE);
+
+                chip::PayloadContents payload;
+                GetPayloadContents(payload, rendezvoudFlags);
+
+                char payloadBuffer[chip::QRCodeBasicSetupPayloadGenerator::kMaxQRCodeBase38RepresentationLength + 1];
+                chip::MutableCharSpan qrCode(payloadBuffer);
+
+                esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
+                cfg.display_func = esp_qrcode_print_matter_code;
+
+                if (GetQRCode(qrCode, payload) == CHIP_NO_ERROR)
+                {
+                    lcd_clear(spi);
+                    esp_qrcode_generate(&cfg, qrCode.data());
+                }
+                else
+                {
+                    ESP_LOGE(TAG, "Failed to generate the commissioning QR code");
+                }
             }
         }
         break;
@@ -697,6 +725,12 @@ esp_err_t create_bridge_devices(esp_matter::endpoint_t *ep, uint32_t device_type
     return err;
 }
 
+static void menu_button_single_click_cb(void *args, void *user_data)
+{
+    ESP_LOGI(TAG, "Menu Clicked");
+    start_selected_program();
+}
+
 extern "C" void app_main(void)
 {
     s_wifi_event_group = xEventGroupCreate();
@@ -755,6 +789,8 @@ extern "C" void app_main(void)
 
     lcd_clear(spi);
 
+    // Set up the Matter node and Bridge
+    //
     node::config_t node_config;
     node_t *node = node::create(&node_config, app_attribute_update_cb, app_identification_cb);
     ABORT_APP_ON_FAILURE(node != nullptr, ESP_LOGE(TAG, "Failed to create Matter node"));
@@ -773,14 +809,32 @@ extern "C" void app_main(void)
     err = app_bridge_initialize(node, create_bridge_devices);
     ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to resume the bridged endpoints: %d", err));
 
+    // Wire up buttons
+    //
+    const button_config_t btn_cfg = {0};
+    const button_gpio_config_t btn_gpio_cfg = {
+        .gpio_num = 2,
+        .active_level = 0,
+    };
+    button_handle_t gpio_btn = NULL;
+    esp_err_t ret = iot_button_new_gpio_device(&btn_cfg, &btn_gpio_cfg, &gpio_btn);
+    if (NULL == gpio_btn)
+    {
+        ESP_LOGE(TAG, "Button create failed");
+    }
+
+    iot_button_register_cb(gpio_btn, BUTTON_SINGLE_CLICK, NULL, menu_button_single_click_cb, NULL);
+
+    // Start the main loop
+    //
     TaskHandle_t xHandle = NULL;
 
     xTaskCreate(
-        run_loop,         
-        "NAME",           
-        5 * 1024,         
-        NULL,             
-        tskIDLE_PRIORITY, 
+        run_loop,
+        "NAME",
+        5 * 1024,
+        NULL,
+        tskIDLE_PRIORITY,
         &xHandle);
 
     ESP_LOGI(TAG, "All done!");
