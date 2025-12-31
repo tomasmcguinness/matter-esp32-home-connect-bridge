@@ -2,7 +2,7 @@
 
 Built on the ESP32-S3 Elecrow 4.2" ePaper display, this project will act as a Matter Bridge, exposing your Home Connect Dishwasher to your Matter network.
 
-This project is in its infancy and many parts are missing.
+This project is in its infancy and many parts are missing. For example, access tokens don't get renewed, so access will fail after a few hours.
 
 <img width="500" alt="image" src="https://github.com/user-attachments/assets/330fc1f3-bdf4-4e56-ae0d-cdb371db7c73" />
 
@@ -47,6 +47,7 @@ At present, you will need to compile and flash the firmware manually using IDF. 
 
 ## Outstanding Tasks
 
+* [ ] Refresh Access Token
 * [ ] Allow program selectiong using the up/down button
 * [ ] Correctly handle the available devices
 * [ ] Display current status of the device (started, stopped, door open etc)
