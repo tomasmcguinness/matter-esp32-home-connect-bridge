@@ -13,13 +13,13 @@ This project is in its infancy and many parts are missing.
 
 There are two steps involved in setting up the device. After flashing the firmware and powering it up..
 
-### Scan the Matter QR code 
+#### Scan the Matter QR code 
 This will allow you to commission the device into your Matter network. It should appear as a bridge.
 
-### Scan the Home Connect QR code.
+#### Scan the Home Connect QR code.
 This will then allow the device to access your Home Connect devices. This happens using OAuth and your username and password is never exposed.
 
-### The available programs should appear.
+#### The available programs should appear.
 Once connected to Home Connect, the device will pull down and store the list of available programs.
 
 ## Using
@@ -47,12 +47,12 @@ At present, you will need to compile and flash the firmware manually using IDF. 
 
 ## Outstanding Tasks
 
-[ ] Allow program selectiong using the up/down button
-[ ] Correctly handle the available devices
-[ ] Display current status of the device (started, stopped, door open etc)
-[ ] Real time events
-[ ] Fully local connection
-[ ] Refactor the code to clean it up.
+* [ ] Allow program selectiong using the up/down button
+* [ ] Correctly handle the available devices
+* [ ] Display current status of the device (started, stopped, door open etc)
+* [ ] Real time events
+* [ ] Fully local connection
+* [ ] Refactor the code to clean it up.
 
 ## Dev Notes
 
