@@ -6,6 +6,9 @@ This project is in its infancy and many parts are missing.
 
 <img width="500" alt="image" src="https://github.com/user-attachments/assets/330fc1f3-bdf4-4e56-ae0d-cdb371db7c73" />
 
+> [!NOTE]
+> Before you say it, I know `Program` is spelt incorrectly. The code is showing the wrong glyph for the letter m :)
+
 ## Setup
 
 There are two steps involved in setting up the device. After flashing the firmware and powering it up..
@@ -18,6 +21,10 @@ This will then allow the device to access your Home Connect devices. This happen
 
 ### The available programs should appear.
 Once connected to Home Connect, the device will pull down and store the list of available programs.
+
+## Using
+
+The display itself is very limited. The `Menu` button should start the selected program, with a one minute delay. You cannot use the display to select a program yet.
 
 ## Matter Support
 So far, the only Matter controller I've seen that can handle the dishwasher is the one in Home Assistant
@@ -38,8 +45,9 @@ Built against the `esp-matter` `main` branch.
 
 At present, you will need to compile and flash the firmware manually using IDF. I hope to provide a precompiled binary.
 
-## Tasks
+## Outstanding Tasks
 
+[ ] Allow program selectiong using the up/down button
 [ ] Correctly handle the available devices
 [ ] Display current status of the device (started, stopped, door open etc)
 [ ] Real time events
