@@ -63,6 +63,8 @@ https://tomasmcguinness.com/2025/12/30/creating-a-matter-bridge-for-my-neff-dish
 
 ## The display
 
+I got the display from Elecrow for free in order to review it.
+
 If you want to purchase the Elecrow display, you can find it here. This is an affiliate link and I'll earn a little commissioning if you purchase with this.
 
 https://www.awin1.com/cread.php?awinmid=82721&awinaffid=2699766&ued=https%3A%2F%2Fwww.elecrow.com%2Fcrowpanel-esp32-4-2-e-paper-hmi-display-with-400-300-resolution-black-white-color-driven-by-spi-interface.html
